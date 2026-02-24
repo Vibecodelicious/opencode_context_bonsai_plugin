@@ -11,7 +11,7 @@ function findMessageIndex(messages: WithParts[], id: string): number | null {
 
 function isInPrunedRange(messages: WithParts[], id: string, pluginID: string): boolean {
   for (const msg of messages) {
-    const archive = msg.metadata[pluginID]?.archive
+    const archive = (msg.metadata[pluginID] as any)?.archive
     if (archive && archive.rangeEnd) {
       const msgIndex = findMessageIndex(messages, id)
       const startIndex = findMessageIndex(messages, msg.id)

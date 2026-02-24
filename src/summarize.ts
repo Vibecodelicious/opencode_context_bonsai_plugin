@@ -1,10 +1,10 @@
 import { generateText } from 'ai'
-import type { LanguageModelV2 } from 'ai'
+import type { LanguageModel } from 'ai'
 import type { WithParts } from './test/fixtures'
 
 export async function summarizeRange(
   messages: WithParts[],
-  languageModel: LanguageModelV2
+  languageModel: LanguageModel
 ): Promise<{ summary: string; indexTerms: string[] }> {
   // Filter out synthetic parts before summarization
   const filteredMessages = messages.map(msg => ({

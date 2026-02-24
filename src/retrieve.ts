@@ -1,10 +1,10 @@
-import { tool } from "@opencode-ai/plugin"
+import { tool, type ToolDefinition } from "@opencode-ai/plugin"
 import { getArchive } from "./schema"
 import { getSameStepPrunes } from "./state"
 import { PLUGIN_ID } from "./constants"
 import type { WithParts } from "./test/fixtures"
 
-export const retrieveTool = tool({
+export const retrieveTool: ToolDefinition = tool({
   description: "Restore previously pruned conversation content by clearing archive metadata from the anchor message",
   args: {
     anchor_id: tool.schema.string().describe("The ID of the anchor message to restore")
