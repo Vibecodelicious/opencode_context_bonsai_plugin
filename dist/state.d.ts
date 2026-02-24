@@ -18,3 +18,4 @@ export declare const setSameStepPrunes: (sessionID: string, value: Set<string>) 
 export declare const getTurnCount: (sessionID: string) => number;
 export declare const setTurnCount: (sessionID: string, value: number) => Map<string, number>;
 export declare const clearSameStepPrunes: (sessionID: string) => void;
+export declare const clearSessionState: (sessionID: string) => void;

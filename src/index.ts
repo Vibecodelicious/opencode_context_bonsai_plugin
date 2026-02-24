@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { getSystemPromptGuidance } from "./prompt"
+import { PLUGIN_ID } from "./constants"
 
 export const contextBonsai: Plugin = async (_input) => ({
   tool: {},

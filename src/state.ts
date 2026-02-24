@@ -22,3 +22,11 @@ export const setTurnCount = (sessionID: string, value: number) => turnCount.set(
 export const clearSameStepPrunes = (sessionID: string) => {
   sameStepPrunes.set(sessionID, new Set<string>())
 }
+
+export const clearSessionState = (sessionID: string) => {
+  tokenCache.delete(sessionID)
+  modelLimitCache.delete(sessionID)
+  idVisibility.delete(sessionID)
+  sameStepPrunes.delete(sessionID)
+  turnCount.delete(sessionID)
+}

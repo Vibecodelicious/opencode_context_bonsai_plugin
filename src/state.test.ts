@@ -5,7 +5,8 @@ import {
   getIdVisibility, setIdVisibility,
   getSameStepPrunes, setSameStepPrunes,
   getTurnCount, setTurnCount,
-  clearSameStepPrunes
+  clearSameStepPrunes,
+  clearSessionState
 } from "./state"
 
 describe("state management", () => {
@@ -46,5 +47,23 @@ describe("state management", () => {
     
     clearSameStepPrunes("test-session")
     expect(getSameStepPrunes("test-session").size).toBe(0)
+  })
+
+  test("clearSessionState removes all session data", () => {
+    const sessionID = "cleanup-test"
+    
+    setTokenCache(sessionID, {inputTokens: 100, outputTokens: 50})
+    setModelLimitCache(sessionID, 1000)
+    setIdVisibility(sessionID, true)
+    setSameStepPrunes(sessionID, new Set(["id1"]))
+    setTurnCount(sessionID, 5)
+    
+    clearSessionState(sessionID)
+    
+    expect(getTokenCache(sessionID)).toBeNull()
+    expect(getModelLimitCache(sessionID)).toBeNull()
+    expect(getIdVisibility(sessionID)).toBe(false)
+    expect(getSameStepPrunes(sessionID).size).toBe(0)
+    expect(getTurnCount(sessionID)).toBe(0)
   })
 })
