@@ -1,8 +1,19 @@
-import { describe, test, expect, beforeEach } from 'bun:test'
+import { describe, test, expect, beforeEach, mock } from 'bun:test'
 import { pruneToolDefinition } from './prune'
 import { makeUserMessage, makeAssistantMessage } from './test/fixtures'
 import { clearSessionState } from './state'
 import { PLUGIN_ID } from './constants'
+import * as summarizeModule from './summarize'
+
+// Mock the summarizeRange function
+const mockSummarizeRange = mock(() => Promise.resolve({
+  summary: 'User greeted assistant and asked how they are',
+  indexTerms: ['greeting', 'conversation', 'hello']
+}))
+
+mock.module('./summarize', () => ({
+  summarizeRange: mockSummarizeRange
+}))
 
 describe('prune tool', () => {
   const sessionID = 'test-session'
@@ -84,12 +95,7 @@ describe('prune tool', () => {
     const mockCtx = {
       sessionID,
       messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: {
-        // Mock language model that returns predictable output
-        doGenerate: async () => ({
-          text: 'SUMMARY: User greeted assistant and asked how they are\nINDEX: greeting, conversation, hello'
-        })
-      },
+      languageModel: {}, // Not used since we mock summarizeRange
       updateMessage: async (id: string, updater: (draft: any) => void) => {
         const draft = { metadata: {} }
         updater(draft)
@@ -108,6 +114,11 @@ describe('prune tool', () => {
   })
 
   test('phase 2: handles summarization failure', async () => {
+    // Mock summarizeRange to throw an error for this test
+    mockSummarizeRange.mockImplementationOnce(() => {
+      throw new Error('Model unavailable')
+    })
+
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there')
@@ -116,11 +127,7 @@ describe('prune tool', () => {
     const mockCtx = {
       sessionID,
       messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: {
-        doGenerate: async () => {
-          throw new Error('Model unavailable')
-        }
-      },
+      languageModel: {}, // Not used since we mock summarizeRange
       updateMessage: async () => {}
     }
 

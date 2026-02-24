@@ -1,4 +1,4 @@
-import { tool } from '@opencode-ai/plugin'
+import { tool, type ToolDefinition } from '@opencode-ai/plugin'
 import { setIdVisibility, getSameStepPrunes, setSameStepPrunes } from './state'
 import { summarizeRange } from './summarize'
 import { PLUGIN_ID } from './constants'
@@ -65,7 +65,7 @@ function validatePruneInput(
   return null
 }
 
-export const pruneToolDefinition = tool({
+export const pruneToolDefinition: ToolDefinition = tool({
   description: 'Archive a range of conversation messages with LLM-generated summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.',
   args: {
     from_id: tool.schema.string().optional().describe('Start message ID for archiving (Phase 2)'),
