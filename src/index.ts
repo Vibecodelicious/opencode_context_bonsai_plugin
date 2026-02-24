@@ -3,11 +3,21 @@ import { getSystemPromptGuidance } from "./prompt"
 import { PLUGIN_ID } from "./constants"
 import { transformMessages } from "./transform"
 import { getIdVisibility } from "./state"
+import { handleTokenEvent, handleChatParams, injectGauge } from "./gauge"
+import { retrieveTool } from "./retrieve"
+import { pruneToolDefinition } from "./prune"
 
 export const contextBonsai: Plugin = async (_input) => ({
-  tool: {},
-  event: async (_input) => {},
-  "chat.params": async (_input, _output) => {},
+  tool: {
+    "context-bonsai:retrieve": retrieveTool,
+    "context-bonsai:prune": pruneToolDefinition
+  },
+  event: async (input) => {
+    handleTokenEvent(input.event)
+  },
+  "chat.params": async (input, _output) => {
+    handleChatParams(input.sessionID, input.model)
+  },
   "experimental.chat.messages.transform": async (input, output) => {
     const sessionID = (input as any).sessionID || output.messages[0]?.info.sessionID || 'default'
     const idVisibility = getIdVisibility(sessionID)
@@ -23,6 +33,9 @@ export const contextBonsai: Plugin = async (_input) => ({
     }))
     
     transformMessages(messages, PLUGIN_ID, idVisibility, sessionID)
+    
+    // Inject gauge after transform
+    injectGauge(messages, sessionID, PLUGIN_ID)
     
     // Update output with transformed messages
     output.messages = messages.map(msg => ({
