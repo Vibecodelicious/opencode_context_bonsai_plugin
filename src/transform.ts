@@ -56,7 +56,7 @@ export function transformMessages(
     }
   }
 
-  // Remove followers in reverse order to avoid index shifting
+  // Remove followers in reverse order to avoid index shifting during splice
   const uniqueIndices = [...new Set(removalIndices)].sort((a, b) => b - a)
   for (const index of uniqueIndices) {
     messages.splice(index, 1)

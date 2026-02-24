@@ -4122,7 +4122,7 @@ var contextBonsai = async (_input) => ({
   event: async (_input2) => {},
   "chat.params": async (_input2, _output) => {},
   "experimental.chat.messages.transform": async (input, output) => {
-    const sessionID = output.messages[0]?.info.sessionID || "default";
+    const sessionID = input.sessionID || output.messages[0]?.info.sessionID || "default";
     const idVisibility2 = getIdVisibility(sessionID);
     const messages = output.messages.map((msg) => ({
       id: msg.info.id,

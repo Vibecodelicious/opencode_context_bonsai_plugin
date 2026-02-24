@@ -9,8 +9,7 @@ export const contextBonsai: Plugin = async (_input) => ({
   event: async (_input) => {},
   "chat.params": async (_input, _output) => {},
   "experimental.chat.messages.transform": async (input, output) => {
-    // Extract sessionID from first message if available
-    const sessionID = output.messages[0]?.info.sessionID || 'default'
+    const sessionID = (input as any).sessionID || output.messages[0]?.info.sessionID || 'default'
     const idVisibility = getIdVisibility(sessionID)
     
     // Convert to WithParts format for transform
