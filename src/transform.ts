@@ -46,8 +46,9 @@ export function transformMessages(
     
     // If rangeEnd exists and is different from anchor, collect follower indices
     if (rangeEndIndex !== -1 && rangeEndIndex !== index) {
-      const start = Math.min(index, rangeEndIndex)
-      const end = Math.max(index, rangeEndIndex)
+      // Prune tool guarantees anchor precedes rangeEnd (fromIndex < toIndex validation in prune.ts)
+      const start = index
+      const end = rangeEndIndex
       
       // Collect indices between anchor and rangeEnd (exclusive of anchor, inclusive of rangeEnd)
       for (let i = start + 1; i <= end; i++) {
