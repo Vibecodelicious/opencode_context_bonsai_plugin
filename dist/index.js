@@ -6109,8 +6109,8 @@ Index: ${archive.indexTerms.join(", ")}`;
     msg.parts = [placeholderPart];
     const rangeEndIndex = messages.findIndex((m) => m.id === archive.rangeEnd);
     if (rangeEndIndex !== -1 && rangeEndIndex !== index) {
-      const start = Math.min(index, rangeEndIndex);
-      const end = Math.max(index, rangeEndIndex);
+      const start = index;
+      const end = rangeEndIndex;
       for (let i = start + 1;i <= end; i++) {
         removalIndices.push(i);
       }
@@ -35815,6 +35815,16 @@ var pruneToolDefinition = tool({
 });
 
 // src/index.ts
+function convertPluginMessages(messages) {
+  return messages.map((msg) => ({
+    id: msg.info.id,
+    sessionID: msg.info.sessionID,
+    role: msg.info.role,
+    parts: msg.parts,
+    metadata: msg.info.metadata || {},
+    createdAt: new Date(msg.info.time?.created || Date.now())
+  }));
+}
 var contextBonsai = async (_input) => ({
   tool: {
     "context-bonsai:retrieve": retrieveTool,
@@ -35829,14 +35839,7 @@ var contextBonsai = async (_input) => ({
   "experimental.chat.messages.transform": async (input, output) => {
     const sessionID = input.sessionID || output.messages[0]?.info.sessionID || "default";
     const idVisibility2 = getIdVisibility(sessionID);
-    const messages = output.messages.map((msg) => ({
-      id: msg.info.id,
-      sessionID: msg.info.sessionID,
-      role: msg.info.role,
-      parts: msg.parts,
-      metadata: msg.info.metadata || {},
-      createdAt: new Date(msg.info.time?.created || Date.now())
-    }));
+    const messages = convertPluginMessages(output.messages);
     transformMessages(messages, PLUGIN_ID, idVisibility2, sessionID);
     injectGauge(messages, sessionID, PLUGIN_ID);
     output.messages = messages.map((msg) => ({
@@ -35854,5 +35857,6 @@ var contextBonsai = async (_input) => ({
 var src_default = contextBonsai;
 export {
   src_default as default,
+  convertPluginMessages,
   contextBonsai
 };
