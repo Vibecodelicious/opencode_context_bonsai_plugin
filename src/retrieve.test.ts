@@ -68,7 +68,7 @@ describe("retrieve tool", () => {
     
     const result = await retrieveTool.execute({ anchor_id: "msg1" }, mockContext)
     
-    expect(result).toBe("Error: This archive was created in the current step. Call context-bonsai:retrieve on the next turn.")
+    expect(result).toBe("Error: This archive was created in the current step. Call context-bonsai-retrieve on the next turn.")
   })
 
   it("should clear metadata and return success message", async () => {

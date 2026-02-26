@@ -1,11 +1,11 @@
 export const getSystemPromptGuidance = () => `
 # Context Bonsai Plugin - Pruning Guidance
 
-You have access to context-bonsai:prune and context-bonsai:retrieve tools for managing conversation context.
+You have access to context-bonsai-prune and context-bonsai-retrieve tools for managing conversation context.
 
 ## Two-Phase Prune Flow
-1. Phase 1: Call context-bonsai:prune with no arguments to see message IDs and gauge visibility
-2. Phase 2: Call context-bonsai:prune with startMessageID, endMessageID, and summary to execute pruning
+1. Phase 1: Call context-bonsai-prune with no arguments to see message IDs and gauge visibility
+2. Phase 2: Call context-bonsai-prune with startMessageID, endMessageID, and summary to execute pruning
 
 ## Proactive Pruning Triggers
 - Completed tasks or project switches

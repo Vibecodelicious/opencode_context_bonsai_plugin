@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { contextBonsai, convertPluginMessages } from "./index"
+import { contextBonsai } from "./index"
+import { convertPluginMessages } from "./convert"
 import { transformMessages } from "./transform"
 import { PLUGIN_ID } from "./constants"
 

@@ -38,7 +38,7 @@ export const retrieveTool: ToolDefinition = tool({
     // Same-step guard: check if anchor was pruned in current step
     const sameStepPrunes = getSameStepPrunes(ctx.sessionID)
     if (sameStepPrunes.has(anchor_id)) {
-      return "Error: This archive was created in the current step. Call context-bonsai:retrieve on the next turn."
+      return "Error: This archive was created in the current step. Call context-bonsai-retrieve on the next turn."
     }
     
     // Count messages in range for status message
