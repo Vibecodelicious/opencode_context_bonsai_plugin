@@ -5,7 +5,13 @@ You have access to context-bonsai-prune and context-bonsai-retrieve tools for ma
 
 ## Two-Phase Prune Flow
 1. Phase 1: Call context-bonsai-prune with no arguments to see message IDs and gauge visibility
-2. Phase 2: Call context-bonsai-prune with startMessageID, endMessageID, and summary to execute pruning
+2. Phase 2: Call context-bonsai-prune with from_id, to_id, summary, index_terms, and optional reason to execute pruning
+
+## Summary Quality
+Write 1-3 sentences focusing on decisions made, outcomes reached, and key learnings. Avoid play-by-play descriptions.
+
+## Index Terms
+Provide 3-8 keywords covering topics discussed, tools used, files touched, and outcomes achieved.
 
 ## Proactive Pruning Triggers
 - Completed tasks or project switches

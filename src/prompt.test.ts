@@ -15,5 +15,8 @@ describe("getSystemPromptGuidance", () => {
     expect(guidance).toContain("Two-Phase Prune Flow")
     expect(guidance).toContain("Gauge-Based Escalation")
     expect(guidance).toContain("Quality Gate")
+    expect(guidance).toContain("Summary Quality")
+    expect(guidance).toContain("Index Terms")
+    expect(guidance).toContain("from_id, to_id")
   })
 })
