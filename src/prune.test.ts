@@ -3,17 +3,6 @@ import { pruneToolDefinition } from './prune'
 import { makeUserMessage, makeAssistantMessage } from './test/fixtures'
 import { clearSessionState } from './state'
 import { PLUGIN_ID } from './constants'
-import * as summarizeModule from './summarize'
-
-// Mock the summarizeRange function
-const mockSummarizeRange = mock(() => Promise.resolve({
-  summary: 'User greeted assistant and asked how they are',
-  indexTerms: ['greeting', 'conversation', 'hello']
-}))
-
-mock.module('./summarize', () => ({
-  summarizeRange: mockSummarizeRange
-}))
 
 describe('prune tool', () => {
   const sessionID = 'test-session'
@@ -61,7 +50,12 @@ describe('prune tool', () => {
       updateMessage: null
     }
 
-    const result = await pruneToolDefinition.execute({ from_id: 'nonexistent', to_id: 'msg2' }, mockCtx as any)
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'nonexistent', 
+      to_id: 'msg2',
+      summary: 'Test summary',
+      index_terms: ['test']
+    }, mockCtx as any)
     
     expect(result).toContain('Message ID nonexistent not found')
   })
@@ -79,7 +73,12 @@ describe('prune tool', () => {
       updateMessage: null
     }
 
-    const result = await pruneToolDefinition.execute({ from_id: 'msg2', to_id: 'msg1' }, mockCtx as any)
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg2', 
+      to_id: 'msg1',
+      summary: 'Test summary',
+      index_terms: ['test']
+    }, mockCtx as any)
     
     expect(result).toContain('from_id must precede to_id chronologically')
   })
@@ -95,7 +94,7 @@ describe('prune tool', () => {
     const mockCtx = {
       sessionID,
       messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: {}, // Not used since we mock summarizeRange
+      languageModel: {},
       updateMessage: async (id: string, updater: (draft: any) => void) => {
         const draft = { metadata: {} }
         updater(draft)
@@ -103,7 +102,12 @@ describe('prune tool', () => {
       }
     }
 
-    const result = await pruneToolDefinition.execute({ from_id: 'msg1', to_id: 'msg2' }, mockCtx as any)
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1', 
+      to_id: 'msg2',
+      summary: 'User greeted assistant and asked how they are',
+      index_terms: ['greeting', 'conversation', 'hello']
+    }, mockCtx as any)
     
     expect(result).toContain('Archived 2 messages')
     expect(result).toContain('msg1 to msg2')
@@ -113,12 +117,7 @@ describe('prune tool', () => {
     expect(updatedMetadata[PLUGIN_ID].archive.rangeEnd).toBe('msg2')
   })
 
-  test('phase 2: handles summarization failure', async () => {
-    // Mock summarizeRange to throw an error for this test
-    mockSummarizeRange.mockImplementationOnce(() => {
-      throw new Error('Model unavailable')
-    })
-
+  test('phase 2: requires summary parameter', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there')
@@ -127,13 +126,84 @@ describe('prune tool', () => {
     const mockCtx = {
       sessionID,
       messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: {}, // Not used since we mock summarizeRange
+      languageModel: {},
       updateMessage: async () => {}
     }
 
-    const result = await pruneToolDefinition.execute({ from_id: 'msg1', to_id: 'msg2' }, mockCtx as any)
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1', 
+      to_id: 'msg2',
+      index_terms: ['greeting', 'conversation']
+    }, mockCtx as any)
     
-    expect(result).toContain('Summarization failed')
-    expect(result).toContain('Model unavailable')
+    expect(result).toContain('Phase 2 requires summary parameter')
+  })
+
+  test('phase 2: requires index_terms parameter', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'Hello'),
+      makeAssistantMessage('msg2', sessionID, 'Hi there')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1', 
+      to_id: 'msg2',
+      summary: 'User greeted assistant'
+    }, mockCtx as any)
+    
+    expect(result).toContain('Phase 2 requires index_terms parameter')
+  })
+
+  test('phase 2: rejects empty summary', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'Hello'),
+      makeAssistantMessage('msg2', sessionID, 'Hi there')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1', 
+      to_id: 'msg2',
+      summary: '   ',
+      index_terms: ['greeting', 'conversation']
+    }, mockCtx as any)
+    
+    expect(result).toContain('summary cannot be empty')
+  })
+
+  test('phase 2: rejects empty index_terms array', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'Hello'),
+      makeAssistantMessage('msg2', sessionID, 'Hi there')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1', 
+      to_id: 'msg2',
+      summary: 'User greeted assistant',
+      index_terms: []
+    }, mockCtx as any)
+    
+    expect(result).toContain('index_terms cannot be empty')
   })
 })

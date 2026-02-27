@@ -1,6 +1,5 @@
 import { tool, type ToolDefinition } from '@opencode-ai/plugin'
 import { setIdVisibility, getSameStepPrunes, setSameStepPrunes } from './state'
-import { summarizeRange } from './summarize'
 import { PLUGIN_ID } from './constants'
 import type { WithParts } from './test/fixtures'
 
@@ -70,7 +69,9 @@ export const pruneToolDefinition: ToolDefinition = tool({
   args: {
     from_id: tool.schema.string().optional().describe('Start message ID for archiving (Phase 2)'),
     to_id: tool.schema.string().optional().describe('End message ID for archiving (Phase 2)'),
-    reason: tool.schema.string().optional().describe('Reason for archiving this range (Phase 2)')
+    reason: tool.schema.string().optional().describe('Reason for archiving this range (Phase 2)'),
+    summary: tool.schema.string().optional().describe('Concise summary (1-3 sentences) of the archived content (Phase 2)'),
+    index_terms: tool.schema.array(tool.schema.string()).optional().describe('Keywords for retrieval, 3-8 terms (Phase 2)')
   },
   async execute(args, ctx) {
     // Convert messages to WithParts format
@@ -95,6 +96,22 @@ export const pruneToolDefinition: ToolDefinition = tool({
       return 'Phase 2 requires both from_id and to_id. Call without arguments to see message IDs.'
     }
 
+    if (!args.summary) {
+      return 'Phase 2 requires summary parameter'
+    }
+
+    if (!args.index_terms) {
+      return 'Phase 2 requires index_terms parameter'
+    }
+
+    if (args.summary.trim() === '') {
+      return 'summary cannot be empty'
+    }
+
+    if (args.index_terms.length === 0) {
+      return 'index_terms cannot be empty'
+    }
+
     const validationError = validatePruneInput(messages, args.from_id, args.to_id, PLUGIN_ID)
     if (validationError) {
       return `Validation error: ${validationError}`
@@ -102,37 +119,28 @@ export const pruneToolDefinition: ToolDefinition = tool({
 
     const fromIndex = findMessageIndex(messages, args.from_id)!
     const toIndex = findMessageIndex(messages, args.to_id)!
-    const rangeMessages = messages.slice(fromIndex, toIndex + 1)
 
-    try {
-      // Summarize the range
-      const { summary, indexTerms } = await summarizeRange(rangeMessages, (ctx as any).languageModel)
-
-      // Write archive metadata to the start message
-      await (ctx as any).updateMessage(args.from_id, (draft: any) => {
-        if (!draft.metadata) draft.metadata = {}
-        draft.metadata[PLUGIN_ID] = {
-          archive: {
-            summary,
-            indexTerms,
-            rangeEnd: args.to_id
-          }
+    // Write archive metadata to the start message
+    await (ctx as any).updateMessage(args.from_id, (draft: any) => {
+      if (!draft.metadata) draft.metadata = {}
+      draft.metadata[PLUGIN_ID] = {
+        archive: {
+          summary: args.summary,
+          indexTerms: args.index_terms,
+          rangeEnd: args.to_id
         }
-      })
+      }
+    })
 
-      // Add to same-step prune set
-      const currentPrunes = getSameStepPrunes(ctx.sessionID)
-      currentPrunes.add(args.from_id)
-      setSameStepPrunes(ctx.sessionID, currentPrunes)
+    // Add to same-step prune set
+    const currentPrunes = getSameStepPrunes(ctx.sessionID)
+    currentPrunes.add(args.from_id)
+    setSameStepPrunes(ctx.sessionID, currentPrunes)
 
-      // Clear ID visibility
-      setIdVisibility(ctx.sessionID, false)
+    // Clear ID visibility
+    setIdVisibility(ctx.sessionID, false)
 
-      const rangeSize = toIndex - fromIndex + 1
-      return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}. Summary: ${summary.substring(0, 100)}${summary.length > 100 ? '...' : ''}`
-
-    } catch (error) {
-      return `Summarization failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-    }
+    const rangeSize = toIndex - fromIndex + 1
+    return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}. Summary: ${args.summary.substring(0, 100)}${args.summary.length > 100 ? '...' : ''}`
   }
 })
