@@ -65,7 +65,7 @@ function validatePruneInput(
 }
 
 export const pruneToolDefinition: ToolDefinition = tool({
-  description: 'Archive a range of conversation messages with LLM-generated summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.',
+  description: 'Archive a range of conversation messages with a summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.',
   args: {
     from_id: tool.schema.string().optional().describe('Start message ID for archiving (Phase 2)'),
     to_id: tool.schema.string().optional().describe('End message ID for archiving (Phase 2)'),
