@@ -96,9 +96,11 @@ describe('prune tool', () => {
       messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
       languageModel: {},
       updateMessage: async (id: string, updater: (draft: any) => void) => {
-        const draft = { metadata: {} }
+        const draft = { metadata: {}, parts: [] }
         updater(draft)
-        updatedMetadata = draft.metadata
+        if (id === 'msg1') {
+          updatedMetadata = draft.metadata
+        }
       }
     }
 
@@ -205,5 +207,35 @@ describe('prune tool', () => {
     }, mockCtx as any)
     
     expect(result).toContain('index_terms cannot be empty')
+  })
+
+  test('phase 2: allows single-message range (from_id === to_id)', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'Hello'),
+      makeAssistantMessage('msg2', sessionID, 'Hi there')
+    ]
+
+    let updatedMetadata: any = null
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async (id: string, updater: (draft: any) => void) => {
+        const draft = { metadata: {} }
+        updater(draft)
+        updatedMetadata = draft.metadata
+      }
+    }
+
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1', 
+      to_id: 'msg1',
+      summary: 'User greeting',
+      index_terms: ['greeting']
+    }, mockCtx as any)
+    
+    expect(result).toContain('Archived 1 messages')
+    expect(result).toContain('msg1 to msg1')
+    expect(updatedMetadata[PLUGIN_ID].archive.rangeEnd).toBe('msg1')
   })
 })

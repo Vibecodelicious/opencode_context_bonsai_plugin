@@ -1,11 +1,11 @@
-const tokenCache = new Map<string, {inputTokens: number, outputTokens: number} | null>()
+const tokenCache = new Map<string, {totalTokens: number} | null>()
 const modelLimitCache = new Map<string, number | null>()
 const idVisibility = new Map<string, boolean>()
 const sameStepPrunes = new Map<string, Set<string>>()
 const turnCount = new Map<string, number>()
 
 export const getTokenCache = (sessionID: string) => tokenCache.get(sessionID) ?? null
-export const setTokenCache = (sessionID: string, value: {inputTokens: number, outputTokens: number} | null) => tokenCache.set(sessionID, value)
+export const setTokenCache = (sessionID: string, value: {totalTokens: number} | null) => tokenCache.set(sessionID, value)
 
 export const getModelLimitCache = (sessionID: string) => modelLimitCache.get(sessionID) ?? null
 export const setModelLimitCache = (sessionID: string, value: number | null) => modelLimitCache.set(sessionID, value)

@@ -40,7 +40,7 @@ function validatePruneInput(
   if (fromIndex === null) return `Message ID ${fromId} not found`
   if (toIndex === null) return `Message ID ${toId} not found`
 
-  if (fromIndex >= toIndex) {
+  if (fromIndex > toIndex) {
     return `from_id must precede to_id chronologically`
   }
 

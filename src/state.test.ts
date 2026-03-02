@@ -33,11 +33,11 @@ describe("state management", () => {
   })
 
   test("per-session isolation", () => {
-    setTokenCache("session1", {inputTokens: 100, outputTokens: 50})
-    setTokenCache("session2", {inputTokens: 200, outputTokens: 100})
+    setTokenCache("session1", {totalTokens: 150})
+    setTokenCache("session2", {totalTokens: 300})
     
-    expect(getTokenCache("session1")).toEqual({inputTokens: 100, outputTokens: 50})
-    expect(getTokenCache("session2")).toEqual({inputTokens: 200, outputTokens: 100})
+    expect(getTokenCache("session1")).toEqual({totalTokens: 150})
+    expect(getTokenCache("session2")).toEqual({totalTokens: 300})
   })
 
   test("clearSameStepPrunes resets to empty Set", () => {
@@ -52,7 +52,7 @@ describe("state management", () => {
   test("clearSessionState removes all session data", () => {
     const sessionID = "cleanup-test"
     
-    setTokenCache(sessionID, {inputTokens: 100, outputTokens: 50})
+    setTokenCache(sessionID, {totalTokens: 150})
     setModelLimitCache(sessionID, 1000)
     setIdVisibility(sessionID, true)
     setSameStepPrunes(sessionID, new Set(["id1"]))

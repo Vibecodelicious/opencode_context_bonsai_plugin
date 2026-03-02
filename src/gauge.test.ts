@@ -27,7 +27,7 @@ describe("gauge", () => {
       handleTokenEvent(event)
       
       const cached = getTokenCache(sessionID)
-      expect(cached).toEqual({ inputTokens: 100, outputTokens: 50 })
+      expect(cached).toEqual({ totalTokens: 150 })
     })
 
     test("ignores non-message.updated events", () => {

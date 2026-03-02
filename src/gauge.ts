@@ -6,18 +6,25 @@ import { getTokenCache, setTokenCache, getModelLimitCache, setModelLimitCache, g
 const GAUGE_CADENCE = 5 // Show gauge every N turns
 const GAUGE_TOKEN_OVERHEAD = 30 // Approximate tokens for gauge message
 
+function sumTokens(obj: any): number {
+  if (typeof obj === 'number') return obj
+  if (typeof obj !== 'object' || obj === null) return 0
+  return Object.values(obj).reduce((sum: number, val) => sum + sumTokens(val), 0)
+}
+
 export function handleTokenEvent(event: Event): void {
   if (event.type !== "message.updated") return
   if (event.properties.info.role !== "assistant") return
   if (!event.properties.info.tokens || event.properties.info.tokens.input <= 0) return
 
   const sessionID = event.properties.info.sessionID
-  const tokens = event.properties.info.tokens
+  const tokens = event.properties.info.tokens as any
   
-  setTokenCache(sessionID, {
-    inputTokens: tokens.input,
-    outputTokens: tokens.output || 0
-  })
+  // Use tokens.total if available (present at runtime but not in SDK types)
+  // Fall back to recursive sum if not present
+  const total = tokens.total ?? sumTokens(tokens)
+  
+  setTokenCache(sessionID, { totalTokens: total })
 }
 
 export function handleChatParams(sessionID: string, model: any): void {
@@ -49,7 +56,7 @@ export function injectGauge(messages: WithParts[], sessionID: string, pluginID: 
   
   if (lastUserIndex === -1) return
 
-  const used = tokenData.inputTokens + GAUGE_TOKEN_OVERHEAD
+  const used = tokenData.totalTokens + GAUGE_TOKEN_OVERHEAD
   const percent = Math.round((used / modelLimit) * 100)
   
   const gaugeText = `<system-reminder>\n[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%)]\n</system-reminder>`

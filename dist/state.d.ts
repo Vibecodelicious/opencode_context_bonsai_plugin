@@ -1,13 +1,10 @@
 export declare const getTokenCache: (sessionID: string) => {
-    inputTokens: number;
-    outputTokens: number;
+    totalTokens: number;
 } | null;
 export declare const setTokenCache: (sessionID: string, value: {
-    inputTokens: number;
-    outputTokens: number;
+    totalTokens: number;
 } | null) => Map<string, {
-    inputTokens: number;
-    outputTokens: number;
+    totalTokens: number;
 } | null>;
 export declare const getModelLimitCache: (sessionID: string) => number | null;
 export declare const setModelLimitCache: (sessionID: string, value: number | null) => Map<string, number | null>;
