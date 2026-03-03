@@ -1,4 +1,4 @@
-import type { Part } from "@opencode-ai/sdk";
+import type { Part } from "@opencode-ai/sdk/v2";
 export interface WithParts {
     id: string;
     sessionID: string;

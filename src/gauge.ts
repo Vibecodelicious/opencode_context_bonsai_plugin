@@ -1,5 +1,6 @@
-import type { Event } from "@opencode-ai/sdk"
-import type { TextPart } from "@opencode-ai/sdk"
+import type { Event as V1Event } from "@opencode-ai/sdk"
+import type { AssistantMessage } from "@opencode-ai/sdk/v2"
+import type { TextPart } from "@opencode-ai/sdk/v2"
 import type { WithParts } from "./test/fixtures"
 import { getTokenCache, setTokenCache, getModelLimitCache, setModelLimitCache, getTurnCount, setTurnCount } from "./state"
 
@@ -12,15 +13,16 @@ function sumTokens(obj: any): number {
   return Object.values(obj).reduce((sum: number, val) => sum + sumTokens(val), 0)
 }
 
-export function handleTokenEvent(event: Event): void {
+export function handleTokenEvent(event: V1Event): void {
   if (event.type !== "message.updated") return
   if (event.properties.info.role !== "assistant") return
   if (!event.properties.info.tokens || event.properties.info.tokens.input <= 0) return
 
   const sessionID = event.properties.info.sessionID
-  const tokens = event.properties.info.tokens as any
+  // Cast to v2 AssistantMessage to access tokens.total field
+  const tokens = (event.properties.info as unknown as AssistantMessage).tokens
   
-  // Use tokens.total if available (present at runtime but not in SDK types)
+  // Use tokens.total if available (v2 SDK types include this field)
   // Fall back to recursive sum if not present
   const total = tokens.total ?? sumTokens(tokens)
   

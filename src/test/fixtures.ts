@@ -1,4 +1,4 @@
-import type { Message, Part, TextPart } from "@opencode-ai/sdk"
+import type { Message, Part, TextPart } from "@opencode-ai/sdk/v2"
 
 export interface WithParts {
   id: string
