@@ -16601,7 +16601,9 @@ var pruneToolDefinition = tool({
     setSameStepPrunes(ctx.sessionID, currentPrunes);
     setIdVisibility(ctx.sessionID, false);
     const rangeSize = toIndex - fromIndex + 1;
-    return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}. Summary: ${args.summary.substring(0, 100)}${args.summary.length > 100 ? "..." : ""}`;
+    return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.
+Summary: ${args.summary}
+Index terms: ${args.index_terms.join(", ")}`;
   }
 });
 
