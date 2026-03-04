@@ -1,46 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { createAssistantWithAttachments, createSyntheticWrapperScenario, makeUserMessage, makeAssistantMessage } from './fixtures'
-
-// Import the private function for testing by accessing it through the module
-const pruneModule = require('../prune')
-
-// Access the private resolveToStoredMessage function
-const resolveToStoredMessage = (messages: any[], messageId: string): string => {
-  // We need to test the logic directly since the function is private
-  // Check if message exists
-  const findMessageIndex = (msgs: any[], id: string) => {
-    const index = msgs.findIndex(msg => msg.id === id)
-    return index === -1 ? null : index
-  }
-  
-  if (findMessageIndex(messages, messageId) !== null) {
-    return messageId
-  }
-  
-  // Filter to assistant messages with tool attachments
-  const candidates = messages.filter(msg => 
-    msg.role === 'assistant' && 
-    msg.parts.some(part => 
-      part.type === 'tool' && 
-      part.state?.status === 'completed' && 
-      part.state?.attachments && 
-      part.state.attachments.length > 0
-    )
-  )
-  
-  // Filter candidates with ID < messageId
-  const validCandidates = candidates.filter(msg => msg.id < messageId)
-  
-  // Sort by ID and get the largest
-  const sorted = validCandidates.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-  const parent = sorted[sorted.length - 1]
-  
-  if (!parent) {
-    throw new Error(`Cannot resolve synthetic message ID ${messageId} to parent - no candidate assistant messages with attachments found`)
-  }
-  
-  return parent.id
-}
+import { resolveToStoredMessage } from '../prune'
 
 describe('resolveToStoredMessage', () => {
   test('returns unchanged ID when message exists in storage', () => {

@@ -8,7 +8,7 @@ function findMessageIndex(messages: WithParts[], id: string): number | null {
   return index === -1 ? null : index
 }
 
-function resolveToStoredMessage(messages: WithParts[], messageId: string): string {
+export function resolveToStoredMessage(messages: WithParts[], messageId: string): string {
   // Check if message exists using findMessageIndex
   if (findMessageIndex(messages, messageId) !== null) {
     return messageId
