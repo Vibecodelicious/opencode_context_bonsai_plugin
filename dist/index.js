@@ -16498,6 +16498,19 @@ function findMessageIndex(messages, id) {
   const index = messages.findIndex((msg) => msg.id === id);
   return index === -1 ? null : index;
 }
+function resolveToStoredMessage(messages, messageId) {
+  if (findMessageIndex(messages, messageId) !== null) {
+    return messageId;
+  }
+  const candidates = messages.filter((msg) => msg.role === "assistant" && msg.parts.some((part) => part.type === "tool" && part.state?.status === "completed" && part.state?.attachments && part.state.attachments.length > 0));
+  const validCandidates = candidates.filter((msg) => msg.id < messageId);
+  const sorted = validCandidates.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const parent = sorted[sorted.length - 1];
+  if (!parent) {
+    throw new Error(`Cannot resolve synthetic message ID ${messageId} to parent - no candidate assistant messages with attachments found`);
+  }
+  return parent.id;
+}
 function isInPrunedRange(messages, id, pluginID) {
   for (const msg of messages) {
     const archive = msg.metadata[pluginID]?.archive;
@@ -16517,30 +16530,32 @@ function isInPrunedRange(messages, id, pluginID) {
   return false;
 }
 function validatePruneInput(messages, fromId, toId, pluginID) {
-  const fromIndex = findMessageIndex(messages, fromId);
-  const toIndex = findMessageIndex(messages, toId);
-  if (fromIndex === null)
-    return `Message ID ${fromId} not found`;
-  if (toIndex === null)
-    return `Message ID ${toId} not found`;
-  if (fromIndex > toIndex) {
-    return `from_id must precede to_id chronologically`;
-  }
-  if (isInPrunedRange(messages, fromId, pluginID)) {
-    return `from_id ${fromId} falls within an already-pruned range`;
-  }
-  if (isInPrunedRange(messages, toId, pluginID)) {
-    return `to_id ${toId} falls within an already-pruned range`;
-  }
-  for (let i = fromIndex;i <= toIndex; i++) {
-    const msg = messages[i];
-    for (const part of msg.parts) {
-      if (part.type === "tool" && (part.state?.status === "pending" || part.state?.status === "running")) {
-        return `Range contains incomplete tool calls that would produce malformed history`;
+  try {
+    const resolvedFromId = resolveToStoredMessage(messages, fromId);
+    const resolvedToId = resolveToStoredMessage(messages, toId);
+    const fromIndex = findMessageIndex(messages, resolvedFromId);
+    const toIndex = findMessageIndex(messages, resolvedToId);
+    if (fromIndex > toIndex) {
+      return { error: `from_id must precede to_id chronologically` };
+    }
+    if (isInPrunedRange(messages, resolvedFromId, pluginID)) {
+      return { error: `from_id ${fromId} falls within an already-pruned range` };
+    }
+    if (isInPrunedRange(messages, resolvedToId, pluginID)) {
+      return { error: `to_id ${toId} falls within an already-pruned range` };
+    }
+    for (let i = fromIndex;i <= toIndex; i++) {
+      const msg = messages[i];
+      for (const part of msg.parts) {
+        if (part.type === "tool" && (part.state?.status === "pending" || part.state?.status === "running")) {
+          return { error: `Range contains incomplete tool calls that would produce malformed history` };
+        }
       }
     }
+    return { resolvedFromId, resolvedToId, fromIndex, toIndex };
+  } catch (e) {
+    return { error: e.message };
   }
-  return null;
 }
 var pruneToolDefinition = tool({
   description: "Archive a range of conversation messages with a summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.",
@@ -16579,31 +16594,36 @@ var pruneToolDefinition = tool({
     if (args.index_terms.length === 0) {
       return "index_terms cannot be empty";
     }
-    const validationError = validatePruneInput(messages, args.from_id, args.to_id, PLUGIN_ID);
-    if (validationError) {
-      return `Validation error: ${validationError}`;
+    const result = validatePruneInput(messages, args.from_id, args.to_id, PLUGIN_ID);
+    if ("error" in result) {
+      return `Validation error: ${result.error}`;
     }
-    const fromIndex = findMessageIndex(messages, args.from_id);
-    const toIndex = findMessageIndex(messages, args.to_id);
-    await ctx.updateMessage(args.from_id, (draft) => {
+    await ctx.updateMessage(result.resolvedFromId, (draft) => {
       if (!draft.metadata)
         draft.metadata = {};
       draft.metadata[PLUGIN_ID] = {
         archive: {
           summary: args.summary,
           indexTerms: args.index_terms,
-          rangeEnd: args.to_id
+          rangeEnd: result.resolvedToId
         }
       };
     });
     const currentPrunes = getSameStepPrunes(ctx.sessionID);
-    currentPrunes.add(args.from_id);
+    currentPrunes.add(result.resolvedFromId);
     setSameStepPrunes(ctx.sessionID, currentPrunes);
     setIdVisibility(ctx.sessionID, false);
-    const rangeSize = toIndex - fromIndex + 1;
-    return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.
+    const rangeSize = result.toIndex - result.fromIndex + 1;
+    const idsChanged = args.from_id !== result.resolvedFromId || args.to_id !== result.resolvedToId;
+    if (idsChanged) {
+      return `Archived ${rangeSize} messages from ${args.from_id} (resolved to ${result.resolvedFromId}) to ${args.to_id} (resolved to ${result.resolvedToId}).
 Summary: ${args.summary}
 Index terms: ${args.index_terms.join(", ")}`;
+    } else {
+      return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.
+Summary: ${args.summary}
+Index terms: ${args.index_terms.join(", ")}`;
+    }
   }
 });
 

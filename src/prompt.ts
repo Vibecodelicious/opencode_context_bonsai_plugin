@@ -19,12 +19,6 @@ Provide 3-8 keywords covering topics discussed, tools used, files touched, and o
 - Large tool outputs or reference material accumulation
 - Completed discussions that can be summarized
 
-## Gauge-Based Escalation Policy
-- <30%: No action needed
-- 30-50%: Consider pruning if natural breakpoint exists
-- 50-80%: Actively seek pruning opportunities
-- >80%: Aggressively prune to prevent context overflow
-
 ## Content Detection Patterns
 - Large tool outputs (file contents, command results)
 - Completed discussions with clear outcomes

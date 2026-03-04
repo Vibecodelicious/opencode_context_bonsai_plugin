@@ -94,13 +94,23 @@ hooks) and periodic gauge injection into the conversation via the transform
 hook. Enables autonomous pruning behavior driven by context pressure.
 **Implementation Plan:** `.agents/plans/epic-context-bonsai-plugin/story-context-bonsai-plugin.6-context-gauges.md`
 
+### Story 7: Severity-Scaled Gauge Compaction Nudges
+**Size:** Small
+**Description:** Replace bare gauge data readout with severity-scaled messages
+that instruct the LLM to compact with progressively stronger urgency. Removes
+gauge-based escalation policy from system prompt (single source of truth moves
+to the gauge itself).
+**Implementation Plan:** `.agents/plans/epic-context-bonsai-plugin/story-context-bonsai-plugin.7-severity-scaled-gauge-nudges.md`
+
 ## Dependencies and Integration
 
 - Prerequisites: Phase 1 upstream changes merged into OpenCode
-- Story dependency chain: 1 → 2 → 3 → {4, 5, 6}
+- Story dependency chain: 1 → 2 → 3 → {4, 5, 6} → 7
   - Stories 4, 5, and 6 can be developed in parallel after Story 3
   - Story 5 integration testing benefits from Story 4 (needs archives to retrieve)
   - Story 6 is fully independent of Stories 4 and 5
+  - Story 7 depends on Stories 2 and 6 (modifies both system prompt and gauge
+    injection)
 - Integration points:
   - `@opencode-ai/plugin` package (peerDependency)
   - `ai` SDK v5+ (dependency for `generateText` and `LanguageModelV2` type)

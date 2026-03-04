@@ -29,6 +29,20 @@ export function handleTokenEvent(event: V1Event): void {
   setTokenCache(sessionID, { totalTokens: total })
 }
 
+export function formatGaugeText(used: number, modelLimit: number, percent: number): string {
+  const baseGauge = `[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%)]`
+  
+  if (percent < 30) {
+    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work.`
+  } else if (percent < 60) {
+    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive — a summary is left behind and the original content can be retrieved later.`
+  } else if (percent < 80) {
+    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive — a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune the messages from the previous debugging session, but I need to remember X"). This message persists separately from the pruning summary.`
+  } else {
+    return `${baseGauge} — PRUNE NOW] Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive — a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune msg_abc through msg_def but I need to remember X"). This message persists separately from the pruning summary. Failure to prune immediately will lead to significantly degraded performance.`
+  }
+}
+
 export function handleChatParams(sessionID: string, model: any): void {
   const limit = model.limit?.input || model.limit?.context
   if (limit) {
@@ -61,7 +75,7 @@ export function injectGauge(messages: WithParts[], sessionID: string, pluginID: 
   const used = tokenData.totalTokens + GAUGE_TOKEN_OVERHEAD
   const percent = Math.round((used / modelLimit) * 100)
   
-  const gaugeText = `<system-reminder>\n[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%)]\n</system-reminder>`
+  const gaugeText = `<system-reminder>\n${formatGaugeText(used, modelLimit, percent)}\n</system-reminder>`
   
   const gaugePart: TextPart = {
     id: `gauge-${sessionID}-${currentTurn + 1}`,

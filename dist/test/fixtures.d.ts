@@ -1,4 +1,4 @@
-import type { Part } from "@opencode-ai/sdk/v2";
+import type { Part, ToolPart, FilePart } from "@opencode-ai/sdk/v2";
 export interface WithParts {
     id: string;
     sessionID: string;
@@ -18,3 +18,7 @@ export declare function makeArchivedMessage(id: string, sessionID: string, plugi
     indexTerms: string[];
     rangeEnd: string;
 }): WithParts;
+export declare function createFilePart(id: string): FilePart;
+export declare function createToolPart(id: string, attachmentCount: number): ToolPart;
+export declare function createAssistantWithAttachments(id: string, sessionID: string, attachmentCount: number): WithParts;
+export declare function createSyntheticWrapperScenario(): WithParts[];
