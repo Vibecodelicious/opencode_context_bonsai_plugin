@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, mock } from 'bun:test'
 import { pruneToolDefinition } from './prune'
-import { makeUserMessage, makeAssistantMessage } from './test/fixtures'
+import { makeUserMessage, makeAssistantMessage, createAssistantWithAttachments } from './test/fixtures'
 import { clearSessionState } from './state'
 import { PLUGIN_ID } from './constants'
 
@@ -57,7 +57,65 @@ describe('prune tool', () => {
       index_terms: ['test']
     }, mockCtx as any)
     
-    expect(result).toContain('Message ID nonexistent not found')
+    expect(result).toContain('Cannot resolve synthetic message ID nonexistent to parent')
+  })
+
+  test('validation with synthetic ID resolution succeeds', async () => {
+    const messages = [
+      createAssistantWithAttachments('msg1', sessionID, 1),
+      makeUserMessage('msg2', sessionID, 'Hello')
+    ]
+
+    let updatedMetadata: any = null
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async (id: string, updater: (draft: any) => void) => {
+        const draft = { metadata: {} }
+        updater(draft)
+        if (id === 'msg1') {
+          updatedMetadata = draft.metadata
+        }
+      }
+    }
+
+    // Synthetic wrapper ID that should resolve to msg1
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1_synthetic', 
+      to_id: 'msg1_synthetic2',
+      summary: 'Test synthetic resolution',
+      index_terms: ['test', 'synthetic']
+    }, mockCtx as any)
+    
+    expect(result).toContain('Archived 1 messages')
+    expect(result).toContain('resolved to msg1')
+    expect(updatedMetadata).toBeTruthy()
+    expect(updatedMetadata[PLUGIN_ID].archive.summary).toBe('Test synthetic resolution')
+  })
+
+  test('success message shows resolved IDs when different from original', async () => {
+    const messages = [
+      createAssistantWithAttachments('msg1', sessionID, 1),
+      makeUserMessage('msg2', sessionID, 'Hello')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({ 
+      from_id: 'msg1_synthetic', 
+      to_id: 'msg1_synthetic2',
+      summary: 'Test message',
+      index_terms: ['test']
+    }, mockCtx as any)
+    
+    expect(result).toContain('msg1_synthetic (resolved to msg1)')
+    expect(result).toContain('msg1_synthetic2 (resolved to msg1)')
   })
 
   test('phase 2: validates chronological order', async () => {
