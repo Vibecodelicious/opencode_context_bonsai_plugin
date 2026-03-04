@@ -207,9 +207,16 @@ describe("gauge", () => {
       expect(result).not.toContain('preserve key details')
     })
 
-    test("should return high severity message for 60-79%", () => {
+    test("should return medium severity message at 60%", () => {
       const result = formatGaugeText(6000, 10000, 60)
       expect(result).toContain('[CONTEXT GAUGE: 6000 / 10000 tokens (60%)]')
+      expect(result).toContain('not destructive')
+      expect(result).not.toContain('preserve key details')
+    })
+
+    test("should return high severity message for 61-80%", () => {
+      const result = formatGaugeText(6100, 10000, 61)
+      expect(result).toContain('[CONTEXT GAUGE: 6100 / 10000 tokens (61%)]')
       expect(result).toContain('Prune any completed')
       expect(result).toContain('continue your work')
       expect(result).toContain('not destructive')
@@ -217,15 +224,15 @@ describe("gauge", () => {
       expect(result).not.toContain('— PRUNE NOW')
     })
 
-    test("should return high severity message at 79%", () => {
-      const result = formatGaugeText(7900, 10000, 79)
+    test("should return high severity message at 80%", () => {
+      const result = formatGaugeText(8000, 10000, 80)
       expect(result).toContain('preserve key details')
       expect(result).not.toContain('— PRUNE NOW')
     })
 
-    test("should return critical severity message for >=80%", () => {
-      const result = formatGaugeText(8000, 10000, 80)
-      expect(result).toContain('[CONTEXT GAUGE: 8000 / 10000 tokens (80%)] — PRUNE NOW]')
+    test("should return critical severity message for >=81%", () => {
+      const result = formatGaugeText(8100, 10000, 81)
+      expect(result).toContain('[CONTEXT GAUGE: 8100 / 10000 tokens (81%) — PRUNE NOW]')
       expect(result).toContain('Prune any completed')
       expect(result).toContain('continue your work')
       expect(result).toContain('not destructive')

@@ -32,12 +32,6 @@ Provide 3-8 keywords covering topics discussed, tools used, files touched, and o
 - Large tool outputs or reference material accumulation
 - Completed discussions that can be summarized
 
-## Gauge-Based Escalation Policy
-- <30%: No action needed
-- 30-50%: Consider pruning if natural breakpoint exists
-- 50-80%: Actively seek pruning opportunities
-- >80%: Aggressively prune to prevent context overflow
-
 ## Content Detection Patterns
 - Large tool outputs (file contents, command results)
 - Completed discussions with clear outcomes
@@ -100,6 +94,18 @@ function handleTokenEvent(event) {
   const total = tokens.total ?? sumTokens(tokens);
   setTokenCache(sessionID, { totalTokens: total });
 }
+function formatGaugeText(used, modelLimit, percent) {
+  const baseGauge = `[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%)]`;
+  if (percent < 30) {
+    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work.`;
+  } else if (percent < 60) {
+    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive \u2014 a summary is left behind and the original content can be retrieved later.`;
+  } else if (percent < 80) {
+    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive \u2014 a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune the messages from the previous debugging session, but I need to remember X"). This message persists separately from the pruning summary.`;
+  } else {
+    return `${baseGauge} \u2014 PRUNE NOW] Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive \u2014 a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune msg_abc through msg_def but I need to remember X"). This message persists separately from the pruning summary. Failure to prune immediately will lead to significantly degraded performance.`;
+  }
+}
 function handleChatParams(sessionID, model) {
   const limit = model.limit?.input || model.limit?.context;
   if (limit) {
@@ -127,7 +133,7 @@ function injectGauge(messages, sessionID, pluginID) {
   const used = tokenData.totalTokens + GAUGE_TOKEN_OVERHEAD;
   const percent = Math.round(used / modelLimit * 100);
   const gaugeText = `<system-reminder>
-[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%)]
+${formatGaugeText(used, modelLimit, percent)}
 </system-reminder>`;
   const gaugePart = {
     id: `gauge-${sessionID}-${currentTurn + 1}`,
