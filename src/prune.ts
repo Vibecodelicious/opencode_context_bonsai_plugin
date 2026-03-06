@@ -3,6 +3,7 @@ import { setIdVisibility, getSameStepPrunes, setSameStepPrunes } from './state'
 import { PLUGIN_ID } from './constants'
 import type { WithParts } from './test/fixtures'
 import { resolvePatternBoundary } from './prune-pattern'
+import { createRuntimeCompat, isRuntimeCompatError, type RuntimeCompat } from './runtime-compat'
 
 function findMessageIndex(messages: WithParts[], id: string): number | null {
   const index = messages.findIndex(msg => msg.id === id)
@@ -100,26 +101,29 @@ function validatePruneInput(
   }
 }
 
-export const pruneToolDefinition: ToolDefinition = tool({
-  description: 'Archive a range of conversation messages with a summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.',
-  args: {
-    from_pattern: tool.schema.string().optional().describe('Pattern used to resolve start message ID (Phase 2 pattern mode)'),
-    to_pattern: tool.schema.string().optional().describe('Pattern used to resolve end message ID (Phase 2 pattern mode)'),
-    reason: tool.schema.string().optional().describe('Reason for archiving this range (Phase 2)'),
-    summary: tool.schema.string().optional().describe('Concise summary (1-3 sentences) of the archived content (Phase 2)'),
-    index_terms: tool.schema.array(tool.schema.string()).optional().describe('Keywords for retrieval, 3-8 terms (Phase 2)')
-  },
-  async execute(rawArgs, ctx) {
-    const args = rawArgs as any
-    // Convert messages to WithParts format
-    const messages: WithParts[] = (ctx as any).messages.map((msg: any) => ({
-      id: msg.info.id,
-      sessionID: msg.info.sessionID,
-      role: msg.info.role,
-      parts: msg.parts,
-      metadata: (msg.info as any).metadata || {},
-      createdAt: new Date((msg.info as any).time?.created || Date.now())
-    }))
+export function createPruneToolDefinition(runtimeCompat: RuntimeCompat): ToolDefinition {
+  return tool({
+    description: 'Archive a range of conversation messages with a summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.',
+    args: {
+      from_pattern: tool.schema.string().optional().describe('Pattern used to resolve start message ID (Phase 2 pattern mode)'),
+      to_pattern: tool.schema.string().optional().describe('Pattern used to resolve end message ID (Phase 2 pattern mode)'),
+      reason: tool.schema.string().optional().describe('Reason for archiving this range (Phase 2)'),
+      summary: tool.schema.string().optional().describe('Concise summary (1-3 sentences) of the archived content (Phase 2)'),
+      index_terms: tool.schema.array(tool.schema.string()).optional().describe('Keywords for retrieval, 3-8 terms (Phase 2)')
+    },
+    async execute(rawArgs, ctx) {
+      const args = rawArgs as any
+      let messages: WithParts[]
+
+      try {
+        messages = await runtimeCompat.loadMessages(ctx)
+      } catch (error) {
+        if (isRuntimeCompatError(error)) {
+          return error.message
+        }
+
+        throw error
+      }
 
     // Phase detection
     const hasFromId = args.from_id !== undefined
@@ -187,37 +191,49 @@ export const pruneToolDefinition: ToolDefinition = tool({
       return `Validation error: ${result.error}`
     }
 
-    // Write archive metadata to the start message
-    await (ctx as any).updateMessage(result.resolvedFromId, (draft: any) => {
-      if (!draft.metadata) draft.metadata = {}
-      draft.metadata[PLUGIN_ID] = {
-        archive: {
-          summary: args.summary,
-          indexTerms: args.index_terms,
-          rangeEnd: result.resolvedToId
+      // Write archive metadata to the start message
+      try {
+        await runtimeCompat.updateMessage(ctx, result.resolvedFromId, (draft: any) => {
+          if (!draft.metadata) draft.metadata = {}
+          draft.metadata[PLUGIN_ID] = {
+            archive: {
+              summary: args.summary,
+              indexTerms: args.index_terms,
+              rangeEnd: result.resolvedToId
+            }
+          }
+        })
+      } catch (error) {
+        if (isRuntimeCompatError(error)) {
+          return error.message
         }
+
+        throw error
       }
-    })
 
-    // Add to same-step prune set
-    const currentPrunes = getSameStepPrunes(ctx.sessionID)
-    currentPrunes.add(result.resolvedFromId)
-    setSameStepPrunes(ctx.sessionID, currentPrunes)
 
-    // Clear ID visibility
-    setIdVisibility(ctx.sessionID, false)
+      // Add to same-step prune set
+      const currentPrunes = getSameStepPrunes(ctx.sessionID)
+      currentPrunes.add(result.resolvedFromId)
+      setSameStepPrunes(ctx.sessionID, currentPrunes)
 
-    const rangeSize = result.toIndex - result.fromIndex + 1
-    const idsChanged = fromId !== result.resolvedFromId || toId !== result.resolvedToId
-    
-    if (selectorMode === 'pattern') {
-      return `Archived ${rangeSize} messages from pattern "${args.from_pattern}" (resolved to ${result.resolvedFromId}) to pattern "${args.to_pattern}" (resolved to ${result.resolvedToId}).\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
+      // Clear ID visibility
+      setIdVisibility(ctx.sessionID, false)
+
+      const rangeSize = result.toIndex - result.fromIndex + 1
+      const idsChanged = fromId !== result.resolvedFromId || toId !== result.resolvedToId
+
+      if (selectorMode === 'pattern') {
+        return `Archived ${rangeSize} messages from pattern "${args.from_pattern}" (resolved to ${result.resolvedFromId}) to pattern "${args.to_pattern}" (resolved to ${result.resolvedToId}).\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
+      }
+
+      if (idsChanged) {
+        return `Archived ${rangeSize} messages from ${args.from_id} (resolved to ${result.resolvedFromId}) to ${args.to_id} (resolved to ${result.resolvedToId}).\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
+      }
+
+      return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
     }
+  })
+}
 
-    if (idsChanged) {
-      return `Archived ${rangeSize} messages from ${args.from_id} (resolved to ${result.resolvedFromId}) to ${args.to_id} (resolved to ${result.resolvedToId}).\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
-    }
-
-    return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
-  }
-})
+export const pruneToolDefinition: ToolDefinition = createPruneToolDefinition(createRuntimeCompat())

@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, test, mock } from "bun:test"
 import { contextBonsai } from "./index"
 import { convertPluginMessages } from "./convert"
 import { transformMessages } from "./transform"
 import { PLUGIN_ID } from "./constants"
+import { makeArchivedMessage } from "./test/fixtures"
 
 describe("contextBonsai", () => {
   test("exports a plugin factory function", () => {
@@ -29,6 +30,40 @@ describe("contextBonsai", () => {
     expect(output.system).toHaveLength(2)
     expect(output.system[0]).toBe("existing prompt")
     expect(output.system[1]).toContain("Context Bonsai Plugin")
+  })
+
+  test("wires injected updater from plugin initialization into tools", async () => {
+    const atomicUpdater = mock(async () => {})
+    const hooks = await contextBonsai({
+      client: {
+        session: {
+          updateMessageAtomic: atomicUpdater
+        }
+      }
+    } as any)
+
+    const archived = makeArchivedMessage("msg1", "s1", PLUGIN_ID, {
+      summary: "summary",
+      indexTerms: ["term"],
+      rangeEnd: "msg1"
+    })
+
+    const result = await hooks.tool!["context-bonsai-retrieve"]!.execute({ anchor_id: "msg1" }, {
+      sessionID: "s1",
+      messages: [{
+        info: {
+          id: archived.id,
+          sessionID: archived.sessionID,
+          role: archived.role,
+          metadata: archived.metadata,
+          time: { created: archived.createdAt.getTime() }
+        },
+        parts: archived.parts
+      }]
+    } as any)
+
+    expect(result).toBe("Restored 1 messages from range msg1 to msg1. Original content is now visible.")
+    expect(atomicUpdater).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -58,7 +93,7 @@ describe("message conversion", () => {
       }]
     }]
 
-    const converted = convertPluginMessages(pluginMessages)
+    const converted = convertPluginMessages(pluginMessages as any)
     
     expect(converted).toHaveLength(1)
     expect(converted[0].id).toBe("msg1")
@@ -99,14 +134,14 @@ describe("message conversion", () => {
       }]
     }]
 
-    const converted = convertPluginMessages(pluginMessages)
+    const converted = convertPluginMessages(pluginMessages as any)
     transformMessages(converted, PLUGIN_ID, false, "s1")
     
     expect(converted).toHaveLength(1)
     expect(converted[0].parts).toHaveLength(1)
     expect(converted[0].parts[0].type).toBe("text")
-    expect(converted[0].parts[0].text).toContain("[PRUNED: msg1 to msg1]")
-    expect(converted[0].parts[0].text).toContain("Summary: Integration test summary")
-    expect(converted[0].parts[0].text).toContain("Index: integration, test")
+    expect((converted[0].parts[0] as any).text).toContain("[PRUNED: msg1 to msg1]")
+    expect((converted[0].parts[0] as any).text).toContain("Summary: Integration test summary")
+    expect((converted[0].parts[0] as any).text).toContain("Index: integration, test")
   })
 })

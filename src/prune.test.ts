@@ -1,8 +1,9 @@
 import { describe, test, expect, beforeEach, mock } from 'bun:test'
-import { pruneToolDefinition } from './prune'
+import { pruneToolDefinition, createPruneToolDefinition } from './prune'
 import { makeUserMessage, makeAssistantMessage, createAssistantWithAttachments } from './test/fixtures'
 import { clearSessionState } from './state'
 import { PLUGIN_ID } from './constants'
+import { createRuntimeCompat } from './runtime-compat'
 
 describe('prune tool', () => {
   const sessionID = 'test-session'
@@ -453,5 +454,37 @@ describe('prune tool', () => {
     expect(result).toContain('Archived 1 messages')
     expect(result).toContain('msg1 to msg1')
     expect(updatedMetadata[PLUGIN_ID].archive.rangeEnd).toBe('msg1')
+  })
+
+  test('returns exact compatibility error when message loading is unsupported', async () => {
+    const compatTool = createPruneToolDefinition(createRuntimeCompat())
+    const result = await compatTool.execute({}, { sessionID } as any)
+    expect(result).toBe('Compatibility error: unable to load session messages in this runtime.')
+  })
+
+  test('returns exact compatibility error when message updates are unsupported', async () => {
+    const compatTool = createPruneToolDefinition(createRuntimeCompat())
+    const messages = [makeUserMessage('msg1', sessionID, 'Hello')]
+
+    const result = await compatTool.execute({
+      from_id: 'msg1',
+      to_id: 'msg1',
+      summary: 'single message summary',
+      index_terms: ['single', 'message', 'summary']
+    }, {
+      sessionID,
+      messages: messages.map(msg => ({
+        info: {
+          id: msg.id,
+          sessionID: msg.sessionID,
+          role: msg.role,
+          metadata: msg.metadata,
+          time: { created: msg.createdAt.getTime() }
+        },
+        parts: msg.parts
+      }))
+    } as any)
+
+    expect(result).toBe('Compatibility error: message updates are unsupported in this runtime.')
   })
 })

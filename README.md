@@ -53,6 +53,19 @@ Or place in `.opencode/plugin/` directory.
 - `@opencode-ai/plugin` package
 - `ai` SDK v5+
 
+## Runtime Compatibility
+
+`opencode-context-bonsai` supports multiple OpenCode runtime capability tiers:
+
+- **Message reads**: uses `ctx.messages` when available; otherwise falls back to `ctx.client.session.messages({ path: { id: ctx.sessionID } })`.
+- **Message writes**: uses `ctx.updateMessage` when available; otherwise uses an internal updater injected at plugin initialization when the runtime exposes an atomic updater capability.
+- **Unsupported runtime behavior**: tools return explicit compatibility errors instead of silently no-oping when required read/write capabilities are unavailable.
+
+Compatibility errors are returned as exact tool output strings:
+
+- `Compatibility error: unable to load session messages in this runtime.`
+- `Compatibility error: message updates are unsupported in this runtime.`
+
 ## Use Cases
 
 - Multi-hour debugging sessions that approach context limits

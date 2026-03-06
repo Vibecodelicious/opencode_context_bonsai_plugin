@@ -4,15 +4,19 @@ import { PLUGIN_ID } from "./constants"
 import { transformMessages } from "./transform"
 import { getIdVisibility, clearSameStepPrunes } from "./state"
 import { handleTokenEvent, handleChatParams, injectGauge } from "./gauge"
-import { retrieveTool } from "./retrieve"
-import { pruneToolDefinition } from "./prune"
+import { createRetrieveTool } from "./retrieve"
+import { createPruneToolDefinition } from "./prune"
 import { convertPluginMessages } from "./convert"
+import { buildRuntimeCompat } from "./runtime-compat"
 
-export const contextBonsai: Plugin = async (_input) => ({
-  tool: {
-    "context-bonsai-retrieve": retrieveTool,
-    "context-bonsai-prune": pruneToolDefinition
-  },
+export const contextBonsai: Plugin = async (input) => {
+  const runtimeCompat = buildRuntimeCompat({ client: (input as any).client })
+
+  return {
+    tool: {
+      "context-bonsai-retrieve": createRetrieveTool(runtimeCompat),
+      "context-bonsai-prune": createPruneToolDefinition(runtimeCompat)
+    },
   event: async (input) => {
     handleTokenEvent(input.event)
   },
@@ -106,6 +110,7 @@ export const contextBonsai: Plugin = async (_input) => ({
   "experimental.chat.system.transform": async (_input, output) => {
     output.system.push(getSystemPromptGuidance())
   }
-})
+  }
+}
 
 export default contextBonsai
