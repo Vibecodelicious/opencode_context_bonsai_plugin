@@ -103,15 +103,14 @@ function validatePruneInput(
 export const pruneToolDefinition: ToolDefinition = tool({
   description: 'Archive a range of conversation messages with a summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.',
   args: {
-    from_id: tool.schema.string().optional().describe('Start message ID for archiving (Phase 2)'),
-    to_id: tool.schema.string().optional().describe('End message ID for archiving (Phase 2)'),
     from_pattern: tool.schema.string().optional().describe('Pattern used to resolve start message ID (Phase 2 pattern mode)'),
     to_pattern: tool.schema.string().optional().describe('Pattern used to resolve end message ID (Phase 2 pattern mode)'),
     reason: tool.schema.string().optional().describe('Reason for archiving this range (Phase 2)'),
     summary: tool.schema.string().optional().describe('Concise summary (1-3 sentences) of the archived content (Phase 2)'),
     index_terms: tool.schema.array(tool.schema.string()).optional().describe('Keywords for retrieval, 3-8 terms (Phase 2)')
   },
-  async execute(args, ctx) {
+  async execute(rawArgs, ctx) {
+    const args = rawArgs as any
     // Convert messages to WithParts format
     const messages: WithParts[] = (ctx as any).messages.map((msg: any) => ({
       id: msg.info.id,
@@ -133,7 +132,7 @@ export const pruneToolDefinition: ToolDefinition = tool({
     if (!hasAnyIdSelector && !hasAnyPatternSelector) {
       // Phase 1: Enable ID visibility
       setIdVisibility(ctx.sessionID, true)
-      return 'Message IDs are now visible in the conversation. Use the prune tool again with from_id and to_id to archive a specific range.'
+      return 'Message IDs are now visible in the conversation. Use the prune tool again with from_pattern and to_pattern to archive a specific range.'
     }
 
     // Phase 2: Validate inputs

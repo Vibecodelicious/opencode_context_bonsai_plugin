@@ -5,13 +5,12 @@ You have access to context-bonsai-prune and context-bonsai-retrieve tools for ma
 
 ## Two-Phase Prune Flow
 1. Phase 1: Call context-bonsai-prune with no arguments to see message IDs and gauge visibility
-2. Phase 2: Choose one selector mode and include summary, index_terms, and optional reason:
-   - ID mode: from_id + to_id
+2. Phase 2: Use pattern selection with summary, index_terms, and optional reason:
    - Pattern mode: from_pattern + to_pattern
 
 ## Selector Guidance
-- ID mode is the canonical, explicit flow when IDs are visible.
-- Pattern mode is optional convenience and must resolve to one unique start and end message each.
+- Pattern mode is the primary flow and must resolve to one unique start and end message each.
+- Use specific patterns to avoid ambiguity errors.
 
 ## Summary Quality
 Write 1-3 sentences focusing on decisions made, outcomes reached, and key learnings. Avoid play-by-play descriptions.
