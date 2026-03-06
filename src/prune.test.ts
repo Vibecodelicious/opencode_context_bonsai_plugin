@@ -34,7 +34,44 @@ describe('prune tool', () => {
 
     const result = await pruneToolDefinition.execute({ from_id: 'msg1' }, mockCtx as any)
     
-    expect(result).toContain('Phase 2 requires both from_id and to_id')
+    expect(result).toContain('Phase 2 ID mode requires both from_id and to_id')
+  })
+
+  test('phase 2: rejects mixed selector mode', async () => {
+    const mockCtx = {
+      sessionID,
+      messages: [],
+      languageModel: null,
+      updateMessage: null
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_id: 'msg1',
+      to_id: 'msg2',
+      from_pattern: 'alpha',
+      to_pattern: 'beta',
+      summary: 'Test summary',
+      index_terms: ['test', 'selector', 'mixed']
+    }, mockCtx as any)
+
+    expect(result).toBe('Phase 2 requires exactly one selector mode: from_id + to_id or from_pattern + to_pattern.')
+  })
+
+  test('phase 2: validates both patterns required', async () => {
+    const mockCtx = {
+      sessionID,
+      messages: [],
+      languageModel: null,
+      updateMessage: null
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_pattern: 'alpha',
+      summary: 'Test summary',
+      index_terms: ['test', 'pattern', 'partial']
+    }, mockCtx as any)
+
+    expect(result).toBe('Phase 2 pattern mode requires both from_pattern and to_pattern. Call without arguments to see message IDs.')
   })
 
   test('phase 2: validates message IDs exist', async () => {
@@ -138,6 +175,127 @@ describe('prune tool', () => {
       index_terms: ['test']
     }, mockCtx as any)
     
+    expect(result).toContain('from_id must precede to_id chronologically')
+  })
+
+  test('pattern mode resolves from and to boundaries', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'Alpha boundary text'),
+      makeAssistantMessage('msg2', sessionID, 'Middle content'),
+      makeUserMessage('msg3', sessionID, 'Omega boundary text')
+    ]
+
+    let updatedID = ''
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async (id: string) => {
+        updatedID = id
+      }
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_pattern: 'Alpha boundary text',
+      to_pattern: 'Omega boundary text',
+      summary: 'Boundary selection by pattern',
+      index_terms: ['pattern', 'boundary', 'selection']
+    }, mockCtx as any)
+
+    expect(updatedID).toBe('msg1')
+    expect(result).toContain('pattern "Alpha boundary text" (resolved to msg1)')
+    expect(result).toContain('pattern "Omega boundary text" (resolved to msg3)')
+  })
+
+  test('pattern mode returns exact no-match error', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'hello world')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_pattern: 'not present',
+      to_pattern: 'hello world',
+      summary: 'No match case',
+      index_terms: ['pattern', 'nomatch', 'error']
+    }, mockCtx as any)
+
+    expect(result).toBe('No messages match "not present"')
+  })
+
+  test('pattern mode returns exact ambiguous-match error', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'shared needle'),
+      makeAssistantMessage('msg2', sessionID, 'shared needle'),
+      makeUserMessage('msg3', sessionID, 'unique tail')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_pattern: 'shared needle',
+      to_pattern: 'unique tail',
+      summary: 'Ambiguous match case',
+      index_terms: ['pattern', 'ambiguous', 'error']
+    }, mockCtx as any)
+
+    expect(result).toBe('2 messages match "shared needle"; use a more precise pattern')
+  })
+
+  test('pattern resolution errors run before validatePruneInput errors', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'first marker'),
+      makeAssistantMessage('msg2', sessionID, 'second marker')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_pattern: 'first marker',
+      to_pattern: 'missing marker',
+      summary: 'Precedence case',
+      index_terms: ['pattern', 'precedence', 'error']
+    }, mockCtx as any)
+
+    expect(result).toBe('No messages match "missing marker"')
+  })
+
+  test('pattern mode still enforces validatePruneInput chronology checks', async () => {
+    const messages = [
+      makeUserMessage('msg1', sessionID, 'first marker'),
+      makeAssistantMessage('msg2', sessionID, 'second marker')
+    ]
+
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async () => {}
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_pattern: 'second marker',
+      to_pattern: 'first marker',
+      summary: 'Chronology with pattern mode',
+      index_terms: ['pattern', 'chronology', 'validation']
+    }, mockCtx as any)
+
     expect(result).toContain('from_id must precede to_id chronologically')
   })
 

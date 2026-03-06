@@ -2,6 +2,7 @@ import { tool, type ToolDefinition } from '@opencode-ai/plugin'
 import { setIdVisibility, getSameStepPrunes, setSameStepPrunes } from './state'
 import { PLUGIN_ID } from './constants'
 import type { WithParts } from './test/fixtures'
+import { resolvePatternBoundary } from './prune-pattern'
 
 function findMessageIndex(messages: WithParts[], id: string): number | null {
   const index = messages.findIndex(msg => msg.id === id)
@@ -104,6 +105,8 @@ export const pruneToolDefinition: ToolDefinition = tool({
   args: {
     from_id: tool.schema.string().optional().describe('Start message ID for archiving (Phase 2)'),
     to_id: tool.schema.string().optional().describe('End message ID for archiving (Phase 2)'),
+    from_pattern: tool.schema.string().optional().describe('Pattern used to resolve start message ID (Phase 2 pattern mode)'),
+    to_pattern: tool.schema.string().optional().describe('Pattern used to resolve end message ID (Phase 2 pattern mode)'),
     reason: tool.schema.string().optional().describe('Reason for archiving this range (Phase 2)'),
     summary: tool.schema.string().optional().describe('Concise summary (1-3 sentences) of the archived content (Phase 2)'),
     index_terms: tool.schema.array(tool.schema.string()).optional().describe('Keywords for retrieval, 3-8 terms (Phase 2)')
@@ -120,15 +123,30 @@ export const pruneToolDefinition: ToolDefinition = tool({
     }))
 
     // Phase detection
-    if (!args.from_id && !args.to_id) {
+    const hasFromId = args.from_id !== undefined
+    const hasToId = args.to_id !== undefined
+    const hasFromPattern = args.from_pattern !== undefined
+    const hasToPattern = args.to_pattern !== undefined
+    const hasAnyIdSelector = hasFromId || hasToId
+    const hasAnyPatternSelector = hasFromPattern || hasToPattern
+
+    if (!hasAnyIdSelector && !hasAnyPatternSelector) {
       // Phase 1: Enable ID visibility
       setIdVisibility(ctx.sessionID, true)
       return 'Message IDs are now visible in the conversation. Use the prune tool again with from_id and to_id to archive a specific range.'
     }
 
     // Phase 2: Validate inputs
-    if (!args.from_id || !args.to_id) {
-      return 'Phase 2 requires both from_id and to_id. Call without arguments to see message IDs.'
+    if (hasAnyIdSelector && hasAnyPatternSelector) {
+      return 'Phase 2 requires exactly one selector mode: from_id + to_id or from_pattern + to_pattern.'
+    }
+
+    if (hasAnyIdSelector && (!hasFromId || !hasToId)) {
+      return 'Phase 2 ID mode requires both from_id and to_id. Call without arguments to see message IDs.'
+    }
+
+    if (hasAnyPatternSelector && (!hasFromPattern || !hasToPattern)) {
+      return 'Phase 2 pattern mode requires both from_pattern and to_pattern. Call without arguments to see message IDs.'
     }
 
     if (!args.summary) {
@@ -147,7 +165,25 @@ export const pruneToolDefinition: ToolDefinition = tool({
       return 'index_terms cannot be empty'
     }
 
-    const result = validatePruneInput(messages, args.from_id, args.to_id, PLUGIN_ID)
+    const selectorMode: 'id' | 'pattern' = hasAnyPatternSelector ? 'pattern' : 'id'
+    let fromId = args.from_id!
+    let toId = args.to_id!
+
+    if (selectorMode === 'pattern') {
+      try {
+        fromId = resolvePatternBoundary(messages, args.from_pattern!)
+      } catch (error: any) {
+        return error.message
+      }
+
+      try {
+        toId = resolvePatternBoundary(messages, args.to_pattern!)
+      } catch (error: any) {
+        return error.message
+      }
+    }
+
+    const result = validatePruneInput(messages, fromId, toId, PLUGIN_ID)
     if ('error' in result) {
       return `Validation error: ${result.error}`
     }
@@ -173,12 +209,16 @@ export const pruneToolDefinition: ToolDefinition = tool({
     setIdVisibility(ctx.sessionID, false)
 
     const rangeSize = result.toIndex - result.fromIndex + 1
-    const idsChanged = args.from_id !== result.resolvedFromId || args.to_id !== result.resolvedToId
+    const idsChanged = fromId !== result.resolvedFromId || toId !== result.resolvedToId
     
+    if (selectorMode === 'pattern') {
+      return `Archived ${rangeSize} messages from pattern "${args.from_pattern}" (resolved to ${result.resolvedFromId}) to pattern "${args.to_pattern}" (resolved to ${result.resolvedToId}).\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
+    }
+
     if (idsChanged) {
       return `Archived ${rangeSize} messages from ${args.from_id} (resolved to ${result.resolvedFromId}) to ${args.to_id} (resolved to ${result.resolvedToId}).\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
-    } else {
-      return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
     }
+
+    return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.\nSummary: ${args.summary}\nIndex terms: ${args.index_terms.join(', ')}`
   }
 })
