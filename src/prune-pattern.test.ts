@@ -23,7 +23,13 @@ describe('prune pattern utilities', () => {
     expect(stableSerialize(value)).toBe('{"a":{"keep":1,"nested":{"a":1,"b":2}},"arr":[1,null,null,null,"7",{"x":1,"y":2}],"z":3}')
   })
 
-  test('buildMessageSearchCorpus includes completed tool content and excludes synthetic text', () => {
+  test('stableSerialize uses strict lexicographic key ordering', () => {
+    const value = { a: 1, A: 2, _: 3 }
+
+    expect(stableSerialize(value)).toBe('{"A":2,"_":3,"a":1}')
+  })
+
+  test('buildMessageSearchCorpus includes completed tool content and excludes synthetic and ignored text', () => {
     const message = makeAssistantMessage('msg1', 's1', 'visible text')
     message.parts.unshift({
       id: 'msg1-synth',
@@ -32,6 +38,14 @@ describe('prune pattern utilities', () => {
       type: 'text',
       text: '[msg:msg1]',
       synthetic: true
+    } as any)
+    message.parts.push({
+      id: 'msg1-ignored',
+      sessionID: 's1',
+      messageID: 'msg1',
+      type: 'text',
+      text: 'hidden text',
+      ignored: true
     } as any)
     message.parts.push({
       id: 'msg1-tool',
@@ -66,6 +80,7 @@ describe('prune pattern utilities', () => {
     expect(corpus).toContain('input:{"a":1,"z":2}')
     expect(corpus).toContain('output:{"ok":true}')
     expect(corpus).not.toContain('[msg:msg1]')
+    expect(corpus).not.toContain('hidden text')
     expect(corpus).not.toContain('tool:bash')
   })
 

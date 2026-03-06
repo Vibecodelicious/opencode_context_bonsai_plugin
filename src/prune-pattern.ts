@@ -34,7 +34,7 @@ function normalizeForStableJson(value: unknown): unknown {
   }
 
   const sortedEntries = Object.keys(value as Record<string, unknown>)
-    .sort((a, b) => a.localeCompare(b))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     .map(key => {
       const normalized = normalizeForStableJson((value as Record<string, unknown>)[key])
       return [key, normalized] as const
@@ -55,7 +55,7 @@ export function buildMessageSearchCorpus(message: WithParts): string {
 
   for (const part of message.parts) {
     if (part.type === 'text') {
-      if ((part as any).synthetic) {
+      if ((part as any).synthetic || (part as any).ignored === true) {
         continue
       }
 
