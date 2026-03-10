@@ -18,7 +18,12 @@ You have access to context-bonsai-prune and context-bonsai-retrieve tools for ma
 
 ## Two-Phase Prune Flow
 1. Phase 1: Call context-bonsai-prune with no arguments to see message IDs and gauge visibility
-2. Phase 2: Call context-bonsai-prune with from_id, to_id, summary, index_terms, and optional reason to execute pruning
+2. Phase 2: Use pattern selection with summary, index_terms, and optional reason:
+   - Pattern mode: from_pattern + to_pattern
+
+## Selector Guidance
+- Pattern mode is the primary flow and must resolve to one unique start and end message each.
+- Use specific patterns to avoid ambiguity errors.
 
 ## Summary Quality
 Write 1-3 sentences focusing on decisions made, outcomes reached, and key learnings. Avoid play-by-play descriptions.
@@ -98,12 +103,12 @@ function formatGaugeText(used, modelLimit, percent) {
   const baseGauge = `[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%)]`;
   if (percent < 30) {
     return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work.`;
-  } else if (percent < 60) {
+  } else if (percent <= 60) {
     return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive \u2014 a summary is left behind and the original content can be retrieved later.`;
-  } else if (percent < 80) {
+  } else if (percent <= 80) {
     return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive \u2014 a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune the messages from the previous debugging session, but I need to remember X"). This message persists separately from the pruning summary.`;
   } else {
-    return `${baseGauge} \u2014 PRUNE NOW] Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive \u2014 a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune msg_abc through msg_def but I need to remember X"). This message persists separately from the pruning summary. Failure to prune immediately will lead to significantly degraded performance.`;
+    return `[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%) \u2014 PRUNE NOW] Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive \u2014 a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune msg_abc through msg_def but I need to remember X"). This message persists separately from the pruning summary. Failure to prune immediately will lead to significantly degraded performance.`;
   }
 }
 function handleChatParams(sessionID, model) {
@@ -16456,48 +16461,645 @@ function getArchive(msg, pluginID) {
   }
 }
 
-// src/retrieve.ts
-var retrieveTool = tool({
-  description: "Restore previously pruned conversation content by clearing archive metadata from the anchor message",
-  args: {
-    anchor_id: tool.schema.string().describe("The ID of the anchor message to restore")
+// src/runtime-compat.ts
+var LOAD_MESSAGES_COMPAT_ERROR = "Compatibility error: unable to load session messages in this runtime.";
+var UPDATE_MESSAGE_COMPAT_ERROR = "Compatibility error: message updates are unsupported in this runtime.";
+function normalizeMessages(messages) {
+  return messages.map((msg) => ({
+    id: msg.info.id,
+    sessionID: msg.info.sessionID,
+    role: msg.info.role,
+    parts: msg.parts,
+    metadata: msg.info.metadata ?? {},
+    createdAt: new Date(msg.info.time?.created ?? Date.now())
+  }));
+}
+function isCompatMessage(message) {
+  return message === LOAD_MESSAGES_COMPAT_ERROR || message === UPDATE_MESSAGE_COMPAT_ERROR;
+}
+function isRuntimeCompatError(error45) {
+  return error45 instanceof Error && isCompatMessage(error45.message);
+}
+function createRuntimeCompat(options) {
+  const injectedUpdater = options?.injectedUpdater;
+  return {
+    async loadMessages(ctx) {
+      if (ctx?.messages !== undefined) {
+        return normalizeMessages(ctx.messages);
+      }
+      const loadSessionMessages = ctx?.client?.session?.messages;
+      if (typeof loadSessionMessages === "function") {
+        const response = await loadSessionMessages({ path: { id: ctx.sessionID } });
+        const data = response?.data ?? response;
+        return normalizeMessages(data);
+      }
+      throw new Error(LOAD_MESSAGES_COMPAT_ERROR);
+    },
+    async updateMessage(ctx, id, mutate) {
+      if (ctx?.updateMessage !== undefined) {
+        await ctx.updateMessage(id, mutate);
+        return;
+      }
+      if (injectedUpdater) {
+        await injectedUpdater(ctx, id, mutate);
+        return;
+      }
+      throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
+    }
+  };
+}
+var updateAdapters = [
+  {
+    name: "client.session.updateMessageAtomic(ctx, id, mutate)",
+    isAvailable: (client) => typeof client?.session?.updateMessageAtomic === "function",
+    invoke: async ({ client, ctx, id, mutate }) => {
+      await client.session.updateMessageAtomic(ctx, id, mutate);
+    }
   },
-  async execute(args, ctx) {
-    const { anchor_id } = args;
-    const messages = ctx.messages.map((msg) => ({
-      id: msg.info.id,
-      sessionID: msg.info.sessionID,
-      role: msg.info.role,
-      parts: msg.parts,
-      metadata: msg.info.metadata || {},
-      createdAt: new Date(msg.info.time?.created || Date.now())
-    }));
-    const anchor = messages.find((msg) => msg.id === anchor_id);
-    if (!anchor) {
-      return `Error: Message ${anchor_id} not found`;
+  {
+    name: "client.session.updateMessageAtomic({ ctx, id, mutate })",
+    isAvailable: (client) => typeof client?.session?.updateMessageAtomic === "function",
+    invoke: async ({ client, ctx, id, mutate }) => {
+      await client.session.updateMessageAtomic({ ctx, id, mutate });
     }
-    const archive = getArchive(anchor, PLUGIN_ID);
-    if (!archive) {
-      return `Error: No archive found for message ${anchor_id}`;
+  },
+  {
+    name: "client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })",
+    isAvailable: (client) => typeof client?.session?.updateMessageAtomic === "function",
+    requiresSessionID: true,
+    invoke: async ({ client, ctx, id, mutate }) => {
+      await client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate });
     }
-    const sameStepPrunes2 = getSameStepPrunes(ctx.sessionID);
-    if (sameStepPrunes2.has(anchor_id)) {
-      return "Error: This archive was created in the current step. Call context-bonsai-retrieve on the next turn.";
+  },
+  {
+    name: "client.session.updateMessage({ ctx, id, mutate })",
+    isAvailable: (client) => typeof client?.session?.updateMessage === "function",
+    invoke: async ({ client, ctx, id, mutate }) => {
+      await client.session.updateMessage({ ctx, id, mutate });
     }
-    const rangeEndIndex = messages.findIndex((msg) => msg.id === archive.rangeEnd);
-    const anchorIndex = messages.findIndex((msg) => msg.id === anchor_id);
-    let messageCount = 1;
-    if (rangeEndIndex !== -1 && rangeEndIndex !== anchorIndex) {
-      const start = Math.min(anchorIndex, rangeEndIndex);
-      const end = Math.max(anchorIndex, rangeEndIndex);
-      messageCount = end - start + 1;
+  },
+  {
+    name: "client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })",
+    isAvailable: (client) => typeof client?.session?.updateMessage === "function",
+    requiresSessionID: true,
+    invoke: async ({ client, ctx, id, mutate }) => {
+      await client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate });
     }
-    await ctx.updateMessage(anchor_id, (draft) => {
-      delete draft.metadata[PLUGIN_ID];
-    });
-    return `Restored ${messageCount} messages from range ${anchor_id} to ${archive.rangeEnd}. Original content is now visible.`;
   }
-});
+];
+function buildRuntimeCompat(input) {
+  const onCompatDiagnostic = input.onCompatDiagnostic;
+  let selectedAdapter;
+  for (const adapter of updateAdapters) {
+    let available = false;
+    try {
+      available = adapter.isAvailable(input.client);
+    } catch (error45) {
+      onCompatDiagnostic?.({
+        type: "adapter_probe_error",
+        adapter: adapter.name,
+        error: error45 instanceof Error ? error45.message : String(error45)
+      });
+      continue;
+    }
+    onCompatDiagnostic?.({ type: "adapter_probe", adapter: adapter.name, available });
+    if (available) {
+      selectedAdapter = adapter;
+      onCompatDiagnostic?.({ type: "adapter_selected", adapter: adapter.name });
+      break;
+    }
+  }
+  if (!selectedAdapter) {
+    onCompatDiagnostic?.({ type: "adapter_none_selected" });
+  }
+  const injectedUpdater = selectedAdapter === undefined ? undefined : async (ctx, id, mutate) => {
+    if (selectedAdapter.requiresSessionID && typeof ctx?.sessionID !== "string") {
+      throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
+    }
+    if (selectedAdapter.requiresSessionID && ctx.sessionID.trim() === "") {
+      throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
+    }
+    try {
+      await selectedAdapter.invoke({ client: input.client, ctx, id, mutate });
+    } catch (error45) {
+      onCompatDiagnostic?.({
+        type: "adapter_invoke_error",
+        adapter: selectedAdapter.name,
+        error: error45 instanceof Error ? error45.message : String(error45)
+      });
+      throw error45;
+    }
+  };
+  return createRuntimeCompat({ injectedUpdater });
+}
+
+// src/retrieve.ts
+function createRetrieveTool(runtimeCompat) {
+  return tool({
+    description: "Restore previously pruned conversation content by clearing archive metadata from the anchor message",
+    args: {
+      anchor_id: tool.schema.string().describe("The ID of the anchor message to restore")
+    },
+    async execute(args, ctx) {
+      const { anchor_id } = args;
+      let messages;
+      try {
+        messages = await runtimeCompat.loadMessages(ctx);
+      } catch (error45) {
+        if (isRuntimeCompatError(error45)) {
+          return error45.message;
+        }
+        throw error45;
+      }
+      const anchor = messages.find((msg) => msg.id === anchor_id);
+      if (!anchor) {
+        return `Error: Message ${anchor_id} not found`;
+      }
+      const archive = getArchive(anchor, PLUGIN_ID);
+      if (!archive) {
+        return `Error: No archive found for message ${anchor_id}`;
+      }
+      const sameStepPrunes2 = getSameStepPrunes(ctx.sessionID);
+      if (sameStepPrunes2.has(anchor_id)) {
+        return "Error: This archive was created in the current step. Call context-bonsai-retrieve on the next turn.";
+      }
+      const rangeEndIndex = messages.findIndex((msg) => msg.id === archive.rangeEnd);
+      const anchorIndex = messages.findIndex((msg) => msg.id === anchor_id);
+      let messageCount = 1;
+      if (rangeEndIndex !== -1 && rangeEndIndex !== anchorIndex) {
+        const start = Math.min(anchorIndex, rangeEndIndex);
+        const end = Math.max(anchorIndex, rangeEndIndex);
+        messageCount = end - start + 1;
+      }
+      try {
+        await runtimeCompat.updateMessage(ctx, anchor_id, (draft) => {
+          delete draft.metadata[PLUGIN_ID];
+        });
+      } catch (error45) {
+        if (isRuntimeCompatError(error45)) {
+          return error45.message;
+        }
+        throw error45;
+      }
+      return `Restored ${messageCount} messages from range ${anchor_id} to ${archive.rangeEnd}. Original content is now visible.`;
+    }
+  });
+}
+var retrieveTool = createRetrieveTool(createRuntimeCompat());
+
+// src/prune-pattern-matcher.ts
+var SINGLE_CANDIDATE_SIMILARITY_THRESHOLD = 0;
+var MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD = 0.3;
+function levenshtein(a, b) {
+  if (a === "" || b === "") {
+    return Math.max(a.length, b.length);
+  }
+  const matrix = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_2, j) => i === 0 ? j : j === 0 ? i : 0));
+  for (let i = 1;i <= a.length; i++) {
+    for (let j = 1;j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+    }
+  }
+  return matrix[a.length][b.length];
+}
+var SimpleReplacer = function* (_content, find) {
+  yield find;
+};
+var LineTrimmedReplacer = function* (content, find) {
+  const originalLines = content.split(`
+`);
+  const searchLines = find.split(`
+`);
+  if (searchLines[searchLines.length - 1] === "") {
+    searchLines.pop();
+  }
+  for (let i = 0;i <= originalLines.length - searchLines.length; i++) {
+    let matches = true;
+    for (let j = 0;j < searchLines.length; j++) {
+      const originalTrimmed = originalLines[i + j].trim();
+      const searchTrimmed = searchLines[j].trim();
+      if (originalTrimmed !== searchTrimmed) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      let matchStartIndex = 0;
+      for (let k = 0;k < i; k++) {
+        matchStartIndex += originalLines[k].length + 1;
+      }
+      let matchEndIndex = matchStartIndex;
+      for (let k = 0;k < searchLines.length; k++) {
+        matchEndIndex += originalLines[i + k].length;
+        if (k < searchLines.length - 1) {
+          matchEndIndex += 1;
+        }
+      }
+      yield content.substring(matchStartIndex, matchEndIndex);
+    }
+  }
+};
+var BlockAnchorReplacer = function* (content, find) {
+  const originalLines = content.split(`
+`);
+  const searchLines = find.split(`
+`);
+  if (searchLines.length < 3) {
+    return;
+  }
+  if (searchLines[searchLines.length - 1] === "") {
+    searchLines.pop();
+  }
+  const firstLineSearch = searchLines[0].trim();
+  const lastLineSearch = searchLines[searchLines.length - 1].trim();
+  const searchBlockSize = searchLines.length;
+  const candidates = [];
+  for (let i = 0;i < originalLines.length; i++) {
+    if (originalLines[i].trim() !== firstLineSearch) {
+      continue;
+    }
+    for (let j = i + 2;j < originalLines.length; j++) {
+      if (originalLines[j].trim() === lastLineSearch) {
+        candidates.push({ startLine: i, endLine: j });
+        break;
+      }
+    }
+  }
+  if (candidates.length === 0) {
+    return;
+  }
+  if (candidates.length === 1) {
+    const { startLine, endLine } = candidates[0];
+    const actualBlockSize = endLine - startLine + 1;
+    let similarity = 0;
+    const linesToCheck = Math.min(searchBlockSize - 2, actualBlockSize - 2);
+    if (linesToCheck > 0) {
+      for (let j = 1;j < searchBlockSize - 1 && j < actualBlockSize - 1; j++) {
+        const originalLine = originalLines[startLine + j].trim();
+        const searchLine = searchLines[j].trim();
+        const maxLen = Math.max(originalLine.length, searchLine.length);
+        if (maxLen === 0) {
+          continue;
+        }
+        const distance = levenshtein(originalLine, searchLine);
+        similarity += (1 - distance / maxLen) / linesToCheck;
+        if (similarity >= SINGLE_CANDIDATE_SIMILARITY_THRESHOLD) {
+          break;
+        }
+      }
+    } else {
+      similarity = 1;
+    }
+    if (similarity >= SINGLE_CANDIDATE_SIMILARITY_THRESHOLD) {
+      let matchStartIndex = 0;
+      for (let k = 0;k < startLine; k++) {
+        matchStartIndex += originalLines[k].length + 1;
+      }
+      let matchEndIndex = matchStartIndex;
+      for (let k = startLine;k <= endLine; k++) {
+        matchEndIndex += originalLines[k].length;
+        if (k < endLine) {
+          matchEndIndex += 1;
+        }
+      }
+      yield content.substring(matchStartIndex, matchEndIndex);
+    }
+    return;
+  }
+  let bestMatch = null;
+  let maxSimilarity = -1;
+  for (const candidate of candidates) {
+    const { startLine, endLine } = candidate;
+    const actualBlockSize = endLine - startLine + 1;
+    let similarity = 0;
+    const linesToCheck = Math.min(searchBlockSize - 2, actualBlockSize - 2);
+    if (linesToCheck > 0) {
+      for (let j = 1;j < searchBlockSize - 1 && j < actualBlockSize - 1; j++) {
+        const originalLine = originalLines[startLine + j].trim();
+        const searchLine = searchLines[j].trim();
+        const maxLen = Math.max(originalLine.length, searchLine.length);
+        if (maxLen === 0) {
+          continue;
+        }
+        const distance = levenshtein(originalLine, searchLine);
+        similarity += 1 - distance / maxLen;
+      }
+      similarity /= linesToCheck;
+    } else {
+      similarity = 1;
+    }
+    if (similarity > maxSimilarity) {
+      maxSimilarity = similarity;
+      bestMatch = candidate;
+    }
+  }
+  if (maxSimilarity >= MULTIPLE_CANDIDATES_SIMILARITY_THRESHOLD && bestMatch) {
+    const { startLine, endLine } = bestMatch;
+    let matchStartIndex = 0;
+    for (let k = 0;k < startLine; k++) {
+      matchStartIndex += originalLines[k].length + 1;
+    }
+    let matchEndIndex = matchStartIndex;
+    for (let k = startLine;k <= endLine; k++) {
+      matchEndIndex += originalLines[k].length;
+      if (k < endLine) {
+        matchEndIndex += 1;
+      }
+    }
+    yield content.substring(matchStartIndex, matchEndIndex);
+  }
+};
+var WhitespaceNormalizedReplacer = function* (content, find) {
+  const normalizeWhitespace = (text) => text.replace(/\s+/g, " ").trim();
+  const normalizedFind = normalizeWhitespace(find);
+  const lines = content.split(`
+`);
+  for (let i = 0;i < lines.length; i++) {
+    const line = lines[i];
+    if (normalizeWhitespace(line) === normalizedFind) {
+      yield line;
+    } else {
+      const normalizedLine = normalizeWhitespace(line);
+      if (normalizedLine.includes(normalizedFind)) {
+        const words = find.trim().split(/\s+/);
+        if (words.length > 0) {
+          const pattern = words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+          try {
+            const regex = new RegExp(pattern);
+            const match = line.match(regex);
+            if (match) {
+              yield match[0];
+            }
+          } catch (_error) {}
+        }
+      }
+    }
+  }
+  const findLines = find.split(`
+`);
+  if (findLines.length > 1) {
+    for (let i = 0;i <= lines.length - findLines.length; i++) {
+      const block = lines.slice(i, i + findLines.length);
+      if (normalizeWhitespace(block.join(`
+`)) === normalizedFind) {
+        yield block.join(`
+`);
+      }
+    }
+  }
+};
+var IndentationFlexibleReplacer = function* (content, find) {
+  const removeIndentation = (text) => {
+    const lines = text.split(`
+`);
+    const nonEmptyLines = lines.filter((line) => line.trim().length > 0);
+    if (nonEmptyLines.length === 0) {
+      return text;
+    }
+    const minIndent = Math.min(...nonEmptyLines.map((line) => {
+      const match = line.match(/^(\s*)/);
+      return match ? match[1].length : 0;
+    }));
+    return lines.map((line) => line.trim().length === 0 ? line : line.slice(minIndent)).join(`
+`);
+  };
+  const normalizedFind = removeIndentation(find);
+  const contentLines = content.split(`
+`);
+  const findLines = find.split(`
+`);
+  for (let i = 0;i <= contentLines.length - findLines.length; i++) {
+    const block = contentLines.slice(i, i + findLines.length).join(`
+`);
+    if (removeIndentation(block) === normalizedFind) {
+      yield block;
+    }
+  }
+};
+var EscapeNormalizedReplacer = function* (content, find) {
+  const unescapeString = (str) => {
+    return str.replace(/\\(n|t|r|'|"|`|\\|\n|\$)/g, (match, capturedChar) => {
+      switch (capturedChar) {
+        case "n":
+          return `
+`;
+        case "t":
+          return "\t";
+        case "r":
+          return "\r";
+        case "'":
+          return "'";
+        case '"':
+          return '"';
+        case "`":
+          return "`";
+        case "\\":
+          return "\\";
+        case `
+`:
+          return `
+`;
+        case "$":
+          return "$";
+        default:
+          return match;
+      }
+    });
+  };
+  const unescapedFind = unescapeString(find);
+  if (content.includes(unescapedFind)) {
+    yield unescapedFind;
+  }
+  const lines = content.split(`
+`);
+  const findLines = unescapedFind.split(`
+`);
+  for (let i = 0;i <= lines.length - findLines.length; i++) {
+    const block = lines.slice(i, i + findLines.length).join(`
+`);
+    const unescapedBlock = unescapeString(block);
+    if (unescapedBlock === unescapedFind) {
+      yield block;
+    }
+  }
+};
+var TrimmedBoundaryReplacer = function* (content, find) {
+  const trimmedFind = find.trim();
+  if (trimmedFind === find) {
+    return;
+  }
+  if (content.includes(trimmedFind)) {
+    yield trimmedFind;
+  }
+  const lines = content.split(`
+`);
+  const findLines = find.split(`
+`);
+  for (let i = 0;i <= lines.length - findLines.length; i++) {
+    const block = lines.slice(i, i + findLines.length).join(`
+`);
+    if (block.trim() === trimmedFind) {
+      yield block;
+    }
+  }
+};
+var ContextAwareReplacer = function* (content, find) {
+  const findLines = find.split(`
+`);
+  if (findLines.length < 3) {
+    return;
+  }
+  if (findLines[findLines.length - 1] === "") {
+    findLines.pop();
+  }
+  const contentLines = content.split(`
+`);
+  const firstLine = findLines[0].trim();
+  const lastLine = findLines[findLines.length - 1].trim();
+  for (let i = 0;i < contentLines.length; i++) {
+    if (contentLines[i].trim() !== firstLine) {
+      continue;
+    }
+    for (let j = i + 2;j < contentLines.length; j++) {
+      if (contentLines[j].trim() === lastLine) {
+        const blockLines = contentLines.slice(i, j + 1);
+        const block = blockLines.join(`
+`);
+        if (blockLines.length === findLines.length) {
+          let matchingLines = 0;
+          let totalNonEmptyLines = 0;
+          for (let k = 1;k < blockLines.length - 1; k++) {
+            const blockLine = blockLines[k].trim();
+            const findLine = findLines[k].trim();
+            if (blockLine.length > 0 || findLine.length > 0) {
+              totalNonEmptyLines++;
+              if (blockLine === findLine) {
+                matchingLines++;
+              }
+            }
+          }
+          if (totalNonEmptyLines === 0 || matchingLines / totalNonEmptyLines >= 0.5) {
+            yield block;
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+};
+var MultiOccurrenceReplacer = function* (content, find) {
+  let startIndex = 0;
+  while (true) {
+    const index = content.indexOf(find, startIndex);
+    if (index === -1) {
+      break;
+    }
+    yield find;
+    startIndex = index + find.length;
+  }
+};
+var PRUNE_PATTERN_REPLACERS = [
+  SimpleReplacer,
+  LineTrimmedReplacer,
+  BlockAnchorReplacer,
+  WhitespaceNormalizedReplacer,
+  IndentationFlexibleReplacer,
+  EscapeNormalizedReplacer,
+  TrimmedBoundaryReplacer,
+  ContextAwareReplacer,
+  MultiOccurrenceReplacer
+];
+function messageMatchesPattern(corpus, pattern) {
+  for (const replacer of PRUNE_PATTERN_REPLACERS) {
+    let hasContainedCandidate = false;
+    for (const candidate of replacer(corpus, pattern)) {
+      if (corpus.includes(candidate)) {
+        hasContainedCandidate = true;
+        break;
+      }
+    }
+    if (hasContainedCandidate) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// src/prune-pattern.ts
+var CORPUS_PART_DELIMITER = `
+<bonsai-part>
+`;
+function normalizeForStableJson(value) {
+  if (value === null) {
+    return null;
+  }
+  const valueType = typeof value;
+  if (valueType === "bigint") {
+    return String(value);
+  }
+  if (valueType === "string" || valueType === "number" || valueType === "boolean") {
+    return value;
+  }
+  if (valueType === "undefined" || valueType === "function" || valueType === "symbol") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const normalized = normalizeForStableJson(item);
+      return normalized === undefined ? null : normalized;
+    });
+  }
+  if (typeof value.toJSON === "function") {
+    return normalizeForStableJson(value.toJSON());
+  }
+  const sortedEntries = Object.keys(value).sort((a, b) => a < b ? -1 : a > b ? 1 : 0).map((key) => {
+    const normalized = normalizeForStableJson(value[key]);
+    return [key, normalized];
+  }).filter(([, normalized]) => normalized !== undefined);
+  return Object.fromEntries(sortedEntries);
+}
+function stableSerialize(value) {
+  const normalized = normalizeForStableJson(value);
+  const serialized = JSON.stringify(normalized);
+  return serialized === undefined ? "null" : serialized;
+}
+function buildMessageSearchCorpus(message) {
+  const segments = [];
+  for (const part of message.parts) {
+    if (part.type === "text") {
+      if (part.synthetic || part.ignored === true) {
+        continue;
+      }
+      const text = part.text;
+      if (typeof text === "string" && text.length > 0) {
+        segments.push(`text:${text}`);
+      }
+      continue;
+    }
+    if (part.type !== "tool") {
+      continue;
+    }
+    if (part.state?.status !== "completed") {
+      continue;
+    }
+    segments.push(`tool:${part.tool}
+input:${stableSerialize(part.state?.input)}
+output:${stableSerialize(part.state?.output)}`);
+  }
+  return segments.join(CORPUS_PART_DELIMITER);
+}
+function resolvePatternBoundary(messages, pattern) {
+  const matchingIds = messages.filter((message) => messageMatchesPattern(buildMessageSearchCorpus(message), pattern)).map((message) => message.id);
+  if (matchingIds.length === 0) {
+    throw new Error(`No messages match "${pattern}"`);
+  }
+  if (matchingIds.length > 1) {
+    throw new Error(`${matchingIds.length} messages match "${pattern}"; use a more precise pattern`);
+  }
+  return matchingIds[0];
+}
 
 // src/prune.ts
 function findMessageIndex(messages, id) {
@@ -16563,75 +17165,118 @@ function validatePruneInput(messages, fromId, toId, pluginID) {
     return { error: e.message };
   }
 }
-var pruneToolDefinition = tool({
-  description: "Archive a range of conversation messages with a summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.",
-  args: {
-    from_id: tool.schema.string().optional().describe("Start message ID for archiving (Phase 2)"),
-    to_id: tool.schema.string().optional().describe("End message ID for archiving (Phase 2)"),
-    reason: tool.schema.string().optional().describe("Reason for archiving this range (Phase 2)"),
-    summary: tool.schema.string().optional().describe("Concise summary (1-3 sentences) of the archived content (Phase 2)"),
-    index_terms: tool.schema.array(tool.schema.string()).optional().describe("Keywords for retrieval, 3-8 terms (Phase 2)")
-  },
-  async execute(args, ctx) {
-    const messages = ctx.messages.map((msg) => ({
-      id: msg.info.id,
-      sessionID: msg.info.sessionID,
-      role: msg.info.role,
-      parts: msg.parts,
-      metadata: msg.info.metadata || {},
-      createdAt: new Date(msg.info.time?.created || Date.now())
-    }));
-    if (!args.from_id && !args.to_id) {
-      setIdVisibility(ctx.sessionID, true);
-      return "Message IDs are now visible in the conversation. Use the prune tool again with from_id and to_id to archive a specific range.";
-    }
-    if (!args.from_id || !args.to_id) {
-      return "Phase 2 requires both from_id and to_id. Call without arguments to see message IDs.";
-    }
-    if (!args.summary) {
-      return "Phase 2 requires summary parameter";
-    }
-    if (!args.index_terms) {
-      return "Phase 2 requires index_terms parameter";
-    }
-    if (args.summary.trim() === "") {
-      return "summary cannot be empty";
-    }
-    if (args.index_terms.length === 0) {
-      return "index_terms cannot be empty";
-    }
-    const result = validatePruneInput(messages, args.from_id, args.to_id, PLUGIN_ID);
-    if ("error" in result) {
-      return `Validation error: ${result.error}`;
-    }
-    await ctx.updateMessage(result.resolvedFromId, (draft) => {
-      if (!draft.metadata)
-        draft.metadata = {};
-      draft.metadata[PLUGIN_ID] = {
-        archive: {
-          summary: args.summary,
-          indexTerms: args.index_terms,
-          rangeEnd: result.resolvedToId
+function createPruneToolDefinition(runtimeCompat) {
+  return tool({
+    description: "Archive a range of conversation messages with a summary. Phase 1: enable message ID visibility. Phase 2: archive specified range.",
+    args: {
+      from_pattern: tool.schema.string().optional().describe("Pattern used to resolve start message ID (Phase 2 pattern mode)"),
+      to_pattern: tool.schema.string().optional().describe("Pattern used to resolve end message ID (Phase 2 pattern mode)"),
+      reason: tool.schema.string().optional().describe("Reason for archiving this range (Phase 2)"),
+      summary: tool.schema.string().optional().describe("Concise summary (1-3 sentences) of the archived content (Phase 2)"),
+      index_terms: tool.schema.array(tool.schema.string()).optional().describe("Keywords for retrieval, 3-8 terms (Phase 2)")
+    },
+    async execute(rawArgs, ctx) {
+      const args = rawArgs;
+      let messages;
+      try {
+        messages = await runtimeCompat.loadMessages(ctx);
+      } catch (error45) {
+        if (isRuntimeCompatError(error45)) {
+          return error45.message;
         }
-      };
-    });
-    const currentPrunes = getSameStepPrunes(ctx.sessionID);
-    currentPrunes.add(result.resolvedFromId);
-    setSameStepPrunes(ctx.sessionID, currentPrunes);
-    setIdVisibility(ctx.sessionID, false);
-    const rangeSize = result.toIndex - result.fromIndex + 1;
-    const idsChanged = args.from_id !== result.resolvedFromId || args.to_id !== result.resolvedToId;
-    if (idsChanged) {
-      return `Archived ${rangeSize} messages from ${args.from_id} (resolved to ${result.resolvedFromId}) to ${args.to_id} (resolved to ${result.resolvedToId}).
+        throw error45;
+      }
+      const hasFromId = args.from_id !== undefined;
+      const hasToId = args.to_id !== undefined;
+      const hasFromPattern = args.from_pattern !== undefined;
+      const hasToPattern = args.to_pattern !== undefined;
+      const hasAnyIdSelector = hasFromId || hasToId;
+      const hasAnyPatternSelector = hasFromPattern || hasToPattern;
+      if (!hasAnyIdSelector && !hasAnyPatternSelector) {
+        setIdVisibility(ctx.sessionID, true);
+        return "Message IDs are now visible in the conversation. Use the prune tool again with from_pattern and to_pattern to archive a specific range.";
+      }
+      if (hasAnyIdSelector && hasAnyPatternSelector) {
+        return "Phase 2 requires exactly one selector mode: from_id + to_id or from_pattern + to_pattern.";
+      }
+      if (hasAnyIdSelector && (!hasFromId || !hasToId)) {
+        return "Phase 2 ID mode requires both from_id and to_id. Call without arguments to see message IDs.";
+      }
+      if (hasAnyPatternSelector && (!hasFromPattern || !hasToPattern)) {
+        return "Phase 2 pattern mode requires both from_pattern and to_pattern. Call without arguments to see message IDs.";
+      }
+      if (!args.summary) {
+        return "Phase 2 requires summary parameter";
+      }
+      if (!args.index_terms) {
+        return "Phase 2 requires index_terms parameter";
+      }
+      if (args.summary.trim() === "") {
+        return "summary cannot be empty";
+      }
+      if (args.index_terms.length === 0) {
+        return "index_terms cannot be empty";
+      }
+      const selectorMode = hasAnyPatternSelector ? "pattern" : "id";
+      let fromId = args.from_id;
+      let toId = args.to_id;
+      if (selectorMode === "pattern") {
+        try {
+          fromId = resolvePatternBoundary(messages, args.from_pattern);
+        } catch (error45) {
+          return error45.message;
+        }
+        try {
+          toId = resolvePatternBoundary(messages, args.to_pattern);
+        } catch (error45) {
+          return error45.message;
+        }
+      }
+      const result = validatePruneInput(messages, fromId, toId, PLUGIN_ID);
+      if ("error" in result) {
+        return `Validation error: ${result.error}`;
+      }
+      try {
+        await runtimeCompat.updateMessage(ctx, result.resolvedFromId, (draft) => {
+          if (!draft.metadata)
+            draft.metadata = {};
+          draft.metadata[PLUGIN_ID] = {
+            archive: {
+              summary: args.summary,
+              indexTerms: args.index_terms,
+              rangeEnd: result.resolvedToId
+            }
+          };
+        });
+      } catch (error45) {
+        if (isRuntimeCompatError(error45)) {
+          return error45.message;
+        }
+        throw error45;
+      }
+      const currentPrunes = getSameStepPrunes(ctx.sessionID);
+      currentPrunes.add(result.resolvedFromId);
+      setSameStepPrunes(ctx.sessionID, currentPrunes);
+      setIdVisibility(ctx.sessionID, false);
+      const rangeSize = result.toIndex - result.fromIndex + 1;
+      const idsChanged = fromId !== result.resolvedFromId || toId !== result.resolvedToId;
+      if (selectorMode === "pattern") {
+        return `Archived ${rangeSize} messages from pattern "${args.from_pattern}" (resolved to ${result.resolvedFromId}) to pattern "${args.to_pattern}" (resolved to ${result.resolvedToId}).
 Summary: ${args.summary}
 Index terms: ${args.index_terms.join(", ")}`;
-    } else {
+      }
+      if (idsChanged) {
+        return `Archived ${rangeSize} messages from ${args.from_id} (resolved to ${result.resolvedFromId}) to ${args.to_id} (resolved to ${result.resolvedToId}).
+Summary: ${args.summary}
+Index terms: ${args.index_terms.join(", ")}`;
+      }
       return `Archived ${rangeSize} messages from ${args.from_id} to ${args.to_id}.
 Summary: ${args.summary}
 Index terms: ${args.index_terms.join(", ")}`;
     }
-  }
-});
+  });
+}
+var pruneToolDefinition = createPruneToolDefinition(createRuntimeCompat());
 
 // src/convert.ts
 function convertPluginMessages(messages) {
@@ -16646,85 +17291,88 @@ function convertPluginMessages(messages) {
 }
 
 // src/index.ts
-var contextBonsai = async (_input) => ({
-  tool: {
-    "context-bonsai-retrieve": retrieveTool,
-    "context-bonsai-prune": pruneToolDefinition
-  },
-  event: async (input) => {
-    handleTokenEvent(input.event);
-  },
-  "chat.params": async (input, _output) => {
-    handleChatParams(input.sessionID, input.model);
-  },
-  "experimental.chat.messages.transform": async (input, output) => {
-    const sessionID = input.sessionID || output.messages[0]?.info.sessionID || "default";
-    const idVisibility2 = getIdVisibility(sessionID);
-    clearSameStepPrunes(sessionID);
-    const anchors = [];
-    const removalIndices = [];
-    for (let i = 0;i < output.messages.length; i++) {
-      const msg = output.messages[i];
-      const metadata = msg.info.metadata || {};
-      const archive = metadata[PLUGIN_ID]?.archive;
-      if (archive) {
-        anchors.push({ index: i, archive });
+var contextBonsai = async (input) => {
+  const runtimeCompat = buildRuntimeCompat({ client: input.client });
+  return {
+    tool: {
+      "context-bonsai-retrieve": createRetrieveTool(runtimeCompat),
+      "context-bonsai-prune": createPruneToolDefinition(runtimeCompat)
+    },
+    event: async (input2) => {
+      handleTokenEvent(input2.event);
+    },
+    "chat.params": async (input2, _output) => {
+      handleChatParams(input2.sessionID, input2.model);
+    },
+    "experimental.chat.messages.transform": async (input2, output) => {
+      const sessionID = input2.sessionID || output.messages[0]?.info.sessionID || "default";
+      const idVisibility2 = getIdVisibility(sessionID);
+      clearSameStepPrunes(sessionID);
+      const anchors = [];
+      const removalIndices = [];
+      for (let i = 0;i < output.messages.length; i++) {
+        const msg = output.messages[i];
+        const metadata = msg.info.metadata || {};
+        const archive = metadata[PLUGIN_ID]?.archive;
+        if (archive) {
+          anchors.push({ index: i, archive });
+        }
       }
-    }
-    for (const { index, archive } of anchors) {
-      const msg = output.messages[index];
-      const placeholderText = `[PRUNED: ${msg.info.id} to ${archive.rangeEnd}]
+      for (const { index, archive } of anchors) {
+        const msg = output.messages[index];
+        const placeholderText = `[PRUNED: ${msg.info.id} to ${archive.rangeEnd}]
 Summary: ${archive.summary}
 Index: ${archive.indexTerms.join(", ")}`;
-      msg.parts = [{
-        id: `${msg.info.id}-placeholder`,
-        sessionID: msg.info.sessionID,
-        messageID: msg.info.id,
-        type: "text",
-        text: placeholderText,
-        synthetic: true
-      }];
-      const rangeEndIndex = output.messages.findIndex((m) => m.info.id === archive.rangeEnd);
-      if (rangeEndIndex !== -1 && rangeEndIndex !== index) {
-        for (let i = index + 1;i <= rangeEndIndex; i++) {
-          removalIndices.push(i);
-        }
-      }
-    }
-    const uniqueIndices = [...new Set(removalIndices)].sort((a, b) => b - a);
-    for (const index of uniqueIndices) {
-      output.messages.splice(index, 1);
-    }
-    if (idVisibility2) {
-      for (const msg of output.messages) {
-        let foundNonSynthetic = false;
-        for (const part of msg.parts) {
-          if (part.type === "text" && !part.synthetic) {
-            part.text = `[msg:${msg.info.id}] ${part.text}`;
-            foundNonSynthetic = true;
-            break;
+        msg.parts = [{
+          id: `${msg.info.id}-placeholder`,
+          sessionID: msg.info.sessionID,
+          messageID: msg.info.id,
+          type: "text",
+          text: placeholderText,
+          synthetic: true
+        }];
+        const rangeEndIndex = output.messages.findIndex((m) => m.info.id === archive.rangeEnd);
+        if (rangeEndIndex !== -1 && rangeEndIndex !== index) {
+          for (let i = index + 1;i <= rangeEndIndex; i++) {
+            removalIndices.push(i);
           }
         }
-        if (!foundNonSynthetic) {
-          const idPart = {
-            id: `${msg.info.id}-id`,
-            sessionID: msg.info.sessionID,
-            messageID: msg.info.id,
-            type: "text",
-            text: `[msg:${msg.info.id}]`,
-            synthetic: true
-          };
-          msg.parts.unshift(idPart);
+      }
+      const uniqueIndices = [...new Set(removalIndices)].sort((a, b) => b - a);
+      for (const index of uniqueIndices) {
+        output.messages.splice(index, 1);
+      }
+      if (idVisibility2) {
+        for (const msg of output.messages) {
+          let foundNonSynthetic = false;
+          for (const part of msg.parts) {
+            if (part.type === "text" && !part.synthetic) {
+              part.text = `[msg:${msg.info.id}] ${part.text}`;
+              foundNonSynthetic = true;
+              break;
+            }
+          }
+          if (!foundNonSynthetic) {
+            const idPart = {
+              id: `${msg.info.id}-id`,
+              sessionID: msg.info.sessionID,
+              messageID: msg.info.id,
+              type: "text",
+              text: `[msg:${msg.info.id}]`,
+              synthetic: true
+            };
+            msg.parts.unshift(idPart);
+          }
         }
       }
+      const messages = convertPluginMessages(output.messages);
+      injectGauge(messages, sessionID, PLUGIN_ID);
+    },
+    "experimental.chat.system.transform": async (_input, output) => {
+      output.system.push(getSystemPromptGuidance());
     }
-    const messages = convertPluginMessages(output.messages);
-    injectGauge(messages, sessionID, PLUGIN_ID);
-  },
-  "experimental.chat.system.transform": async (_input2, output) => {
-    output.system.push(getSystemPromptGuidance());
-  }
-});
+  };
+};
 var src_default = contextBonsai;
 export {
   src_default as default,
