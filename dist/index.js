@@ -16464,6 +16464,9 @@ function getArchive(msg, pluginID) {
 // src/runtime-compat.ts
 var LOAD_MESSAGES_COMPAT_ERROR = "Compatibility error: unable to load session messages in this runtime.";
 var UPDATE_MESSAGE_COMPAT_ERROR = "Compatibility error: message updates are unsupported in this runtime.";
+function hasUpdateMethod(client, method) {
+  return !!client?.session && typeof client.session[method] === "function";
+}
 function normalizeMessages(messages) {
   return messages.map((msg) => ({
     id: msg.info.id,
@@ -16511,21 +16514,21 @@ function createRuntimeCompat(options) {
 var updateAdapters = [
   {
     name: "client.session.updateMessageAtomic(ctx, id, mutate)",
-    isAvailable: (client) => typeof client?.session?.updateMessageAtomic === "function",
+    isAvailable: (client) => hasUpdateMethod(client, "updateMessageAtomic"),
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessageAtomic(ctx, id, mutate);
     }
   },
   {
     name: "client.session.updateMessageAtomic({ ctx, id, mutate })",
-    isAvailable: (client) => typeof client?.session?.updateMessageAtomic === "function",
+    isAvailable: (client) => hasUpdateMethod(client, "updateMessageAtomic"),
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessageAtomic({ ctx, id, mutate });
     }
   },
   {
     name: "client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })",
-    isAvailable: (client) => typeof client?.session?.updateMessageAtomic === "function",
+    isAvailable: (client) => hasUpdateMethod(client, "updateMessageAtomic"),
     requiresSessionID: true,
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate });
@@ -16533,14 +16536,14 @@ var updateAdapters = [
   },
   {
     name: "client.session.updateMessage({ ctx, id, mutate })",
-    isAvailable: (client) => typeof client?.session?.updateMessage === "function",
+    isAvailable: (client) => hasUpdateMethod(client, "updateMessage"),
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessage({ ctx, id, mutate });
     }
   },
   {
     name: "client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })",
-    isAvailable: (client) => typeof client?.session?.updateMessage === "function",
+    isAvailable: (client) => hasUpdateMethod(client, "updateMessage"),
     requiresSessionID: true,
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate });
