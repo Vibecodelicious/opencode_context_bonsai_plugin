@@ -16464,9 +16464,6 @@ function getArchive(msg, pluginID) {
 // src/runtime-compat.ts
 var LOAD_MESSAGES_COMPAT_ERROR = "Compatibility error: unable to load session messages in this runtime.";
 var UPDATE_MESSAGE_COMPAT_ERROR = "Compatibility error: message updates are unsupported in this runtime.";
-function hasUpdateMethod(client, method) {
-  return !!client?.session && typeof client.session[method] === "function";
-}
 function normalizeMessages(messages) {
   return messages.map((msg) => ({
     id: msg.info.id,
@@ -16511,83 +16508,145 @@ function createRuntimeCompat(options) {
     }
   };
 }
-var updateAdapters = [
+function getPathValue(target, path) {
+  return path.split(".").reduce((current, key) => current?.[key], target);
+}
+function locateFunction(runtime, candidatePaths) {
+  for (const path of candidatePaths) {
+    const ownerPath = path.split(".").slice(0, -1).join(".");
+    const key = path.split(".").at(-1);
+    if (!key)
+      continue;
+    const owner = ownerPath === "" ? runtime : getPathValue(runtime, ownerPath);
+    const fn = owner?.[key];
+    if (typeof fn === "function") {
+      return { fn, owner, path };
+    }
+  }
+  return;
+}
+var INJECTOR_CANDIDATES = [
   {
-    name: "client.session.updateMessageAtomic(ctx, id, mutate)",
-    isAvailable: (client) => hasUpdateMethod(client, "updateMessageAtomic"),
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessageAtomic(ctx, id, mutate);
+    name: "session.updateMessageAtomic bridge injector",
+    candidatePaths: ["internals.session.updateMessageAtomic", "session.updateMessageAtomic"],
+    requiredSymbols: ["updateMessageAtomic", "sessionID", "messageID", "mutate"],
+    injectShape: "Invoke atomic updater with tool-context bridge payload."
+  },
+  {
+    name: "session.updateMessage mutate bridge injector",
+    candidatePaths: ["internals.session.updateMessage", "session.updateMessage"],
+    requiredSymbols: ["updateMessage", "sessionID", "messageID", "mutate"],
+    injectShape: "Invoke updateMessage with mutate bridge payload."
+  },
+  {
+    name: "message-route patch injector",
+    candidatePaths: ["internals.messageRoute.patchUpdateMessage", "messageRoute.patchUpdateMessage"],
+    requiredSymbols: ["patchUpdateMessage", "messageBridge.createMutateBridge"],
+    injectShape: "Patch message-route client using runtime mutate-bridge symbol."
+  }
+];
+var updateInjectors = [
+  {
+    name: INJECTOR_CANDIDATES[0].name,
+    isAvailable: (runtime) => locateFunction(runtime, INJECTOR_CANDIDATES[0].candidatePaths) !== undefined,
+    inject: (runtime) => {
+      const located = locateFunction(runtime, INJECTOR_CANDIDATES[0].candidatePaths);
+      if (!located) {
+        throw new Error("selected injector target disappeared");
+      }
+      return async (ctx, id, mutate) => {
+        await located.fn.call(located.owner, {
+          sessionID: ctx.sessionID,
+          messageID: id,
+          mutate,
+          toolContext: ctx
+        });
+      };
     }
   },
   {
-    name: "client.session.updateMessageAtomic({ ctx, id, mutate })",
-    isAvailable: (client) => hasUpdateMethod(client, "updateMessageAtomic"),
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessageAtomic({ ctx, id, mutate });
+    name: INJECTOR_CANDIDATES[1].name,
+    isAvailable: (runtime) => locateFunction(runtime, INJECTOR_CANDIDATES[1].candidatePaths) !== undefined,
+    inject: (runtime) => {
+      const located = locateFunction(runtime, INJECTOR_CANDIDATES[1].candidatePaths);
+      if (!located) {
+        throw new Error("selected injector target disappeared");
+      }
+      return async (ctx, id, mutate) => {
+        await located.fn.call(located.owner, {
+          sessionID: ctx.sessionID,
+          messageID: id,
+          mutate,
+          toolContext: ctx
+        });
+      };
     }
   },
   {
-    name: "client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })",
-    isAvailable: (client) => hasUpdateMethod(client, "updateMessageAtomic"),
-    requiresSessionID: true,
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate });
-    }
-  },
-  {
-    name: "client.session.updateMessage({ ctx, id, mutate })",
-    isAvailable: (client) => hasUpdateMethod(client, "updateMessage"),
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessage({ ctx, id, mutate });
-    }
-  },
-  {
-    name: "client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })",
-    isAvailable: (client) => hasUpdateMethod(client, "updateMessage"),
-    requiresSessionID: true,
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate });
+    name: INJECTOR_CANDIDATES[2].name,
+    isAvailable: (runtime) => {
+      const patchTarget = locateFunction(runtime, INJECTOR_CANDIDATES[2].candidatePaths);
+      const bridgeFactory = getPathValue(runtime, "messageBridge.createMutateBridge");
+      return patchTarget !== undefined && typeof bridgeFactory === "function";
+    },
+    inject: (runtime) => {
+      const patchTarget = locateFunction(runtime, INJECTOR_CANDIDATES[2].candidatePaths);
+      const bridgeFactory = getPathValue(runtime, "messageBridge.createMutateBridge");
+      if (!patchTarget || typeof bridgeFactory !== "function") {
+        throw new Error("selected injector target disappeared");
+      }
+      return async (ctx, id, mutate) => {
+        const mutateBridge = bridgeFactory(mutate);
+        await patchTarget.fn.call(patchTarget.owner, {
+          sessionID: ctx.sessionID,
+          messageID: id,
+          mutateBridge,
+          toolContext: ctx
+        });
+      };
     }
   }
 ];
 function buildRuntimeCompat(input) {
   const onCompatDiagnostic = input.onCompatDiagnostic;
-  let selectedAdapter;
-  for (const adapter of updateAdapters) {
+  let selectedInjector;
+  for (const injector of updateInjectors) {
     let available = false;
     try {
-      available = adapter.isAvailable(input.client);
+      available = injector.isAvailable(input.client);
     } catch (error45) {
       onCompatDiagnostic?.({
-        type: "adapter_probe_error",
-        adapter: adapter.name,
+        type: "injector_probe_error",
+        injector: injector.name,
         error: error45 instanceof Error ? error45.message : String(error45)
       });
       continue;
     }
-    onCompatDiagnostic?.({ type: "adapter_probe", adapter: adapter.name, available });
+    onCompatDiagnostic?.({ type: "injector_probe", injector: injector.name, available });
     if (available) {
-      selectedAdapter = adapter;
-      onCompatDiagnostic?.({ type: "adapter_selected", adapter: adapter.name });
+      selectedInjector = injector;
+      onCompatDiagnostic?.({ type: "injector_selected", injector: injector.name });
       break;
     }
   }
-  if (!selectedAdapter) {
-    onCompatDiagnostic?.({ type: "adapter_none_selected" });
+  if (!selectedInjector) {
+    onCompatDiagnostic?.({ type: "injector_none_selected" });
   }
-  const injectedUpdater = selectedAdapter === undefined ? undefined : async (ctx, id, mutate) => {
-    if (selectedAdapter.requiresSessionID && typeof ctx?.sessionID !== "string") {
+  const selectedInjectorName = selectedInjector?.name;
+  const selectedInjectedUpdater = selectedInjector?.inject(input.client);
+  const injectedUpdater = selectedInjectedUpdater === undefined ? undefined : async (ctx, id, mutate) => {
+    if (typeof ctx?.sessionID !== "string") {
       throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
     }
-    if (selectedAdapter.requiresSessionID && ctx.sessionID.trim() === "") {
+    if (ctx.sessionID.trim() === "") {
       throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
     }
     try {
-      await selectedAdapter.invoke({ client: input.client, ctx, id, mutate });
+      await selectedInjectedUpdater(ctx, id, mutate);
     } catch (error45) {
       onCompatDiagnostic?.({
-        type: "adapter_invoke_error",
-        adapter: selectedAdapter.name,
+        type: "injector_invoke_error",
+        injector: selectedInjectorName ?? "unknown injector",
         error: error45 instanceof Error ? error45.message : String(error45)
       });
       throw error45;

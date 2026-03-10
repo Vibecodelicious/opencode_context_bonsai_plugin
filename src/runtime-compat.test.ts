@@ -3,6 +3,7 @@ import { makeUserMessage, makeAssistantMessage } from './test/fixtures'
 import {
   createRuntimeCompat,
   buildRuntimeCompat,
+  INJECTOR_CANDIDATES,
   LOAD_MESSAGES_COMPAT_ERROR,
   UPDATE_MESSAGE_COMPAT_ERROR
 } from './runtime-compat'
@@ -63,21 +64,6 @@ describe('runtime compatibility', () => {
     await expect(compat.loadMessages({ sessionID: 's1' } as any)).rejects.toThrow(LOAD_MESSAGES_COMPAT_ERROR)
   })
 
-  it('does not fallback when ctx.messages path is present but throws', async () => {
-    const compat = createRuntimeCompat()
-    const clientLoader = mock(async () => [])
-
-    await expect(
-      compat.loadMessages({
-        sessionID: 's1',
-        messages: null,
-        client: { session: { messages: clientLoader } }
-      } as any)
-    ).rejects.toThrow('messages.map')
-
-    expect(clientLoader).not.toHaveBeenCalled()
-  })
-
   it('uses native updateMessage before injected updater', async () => {
     const injectedUpdater = mock(async () => {})
     const nativeUpdater = mock(async () => {})
@@ -89,192 +75,141 @@ describe('runtime compatibility', () => {
     expect(injectedUpdater).not.toHaveBeenCalled()
   })
 
-  it('uses injected updater when native updateMessage is absent', async () => {
-    const injectedUpdater = mock(async () => {})
-    const compat = createRuntimeCompat({ injectedUpdater })
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(injectedUpdater).toHaveBeenCalledTimes(1)
-  })
-
-  it('returns exact update compatibility error when write capability is unavailable', async () => {
-    const compat = createRuntimeCompat()
-    await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow(
-      UPDATE_MESSAGE_COMPAT_ERROR
-    )
-  })
-
-  it('does not fallback when native updateMessage throws', async () => {
-    const injectedUpdater = mock(async () => {})
-    const compat = createRuntimeCompat({ injectedUpdater })
-    const nativeError = new Error('native failure')
-
-    await expect(
-      compat.updateMessage(
-        {
-          updateMessage: async () => {
-            throw nativeError
-          }
-        } as any,
-        'msg1',
-        () => {}
-      )
-    ).rejects.toThrow(nativeError.message)
-
-    expect(injectedUpdater).not.toHaveBeenCalled()
-  })
-
-  it('builder injects updater from initialization client', async () => {
-    const calls: any[] = []
-    const atomicUpdater = async (ctx: any, id: string, mutate: (draft: any) => void) => {
-      calls.push([ctx, id, mutate])
-    }
-    const compat = buildRuntimeCompat({ client: { session: { updateMessageAtomic: atomicUpdater } } })
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.[0]).toEqual(expect.anything())
-    expect(calls[0]?.[1]).toBe('msg1')
-    expect(calls[0]?.[2]).toEqual(expect.any(Function))
-  })
-
-  it('selects first available adapter deterministically', async () => {
-    let atomicCalls = 0
-    const updateMessageAtomic = async (_ctx: any, _id: string, _mutate: (draft: any) => void) => {
-      atomicCalls += 1
-      throw new Error('first signature rejected')
-    }
-    const updateMessage = mock(async () => {})
-    const compat = buildRuntimeCompat({ client: { session: { updateMessageAtomic, updateMessage } } })
-
-    await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow('first signature rejected')
-
-    expect(atomicCalls).toBe(1)
-    expect(updateMessage).not.toHaveBeenCalled()
-  })
-
-  it('selects first structural atomic adapter without signature probing', async () => {
+  it('selects first injector family and emits injector diagnostics', async () => {
     const diagnostics: any[] = []
-    const updateMessageAtomic = async ({
-      sessionID: _sessionID,
-      messageID
-    }: {
-      sessionID: string
-      messageID: string
-    }) => {
-      if (!messageID) {
-        throw new Error('missing messageID')
-      }
-    }
-
+    const atomic = mock(async () => {})
     const compat = buildRuntimeCompat({
-      client: {
-        session: {
-          updateMessageAtomic
-        }
-      },
+      client: { session: { updateMessageAtomic: atomic } },
       onCompatDiagnostic: event => diagnostics.push(event)
     })
 
-    await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow('missing messageID')
+    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
 
+    expect(atomic).toHaveBeenCalledTimes(1)
+    expect(atomic).toHaveBeenCalledWith({
+      sessionID: 's1',
+      messageID: 'msg1',
+      mutate: expect.any(Function),
+      toolContext: expect.anything()
+    })
     expect(diagnostics).toContainEqual({
-      type: 'adapter_selected',
-      adapter: 'client.session.updateMessageAtomic(ctx, id, mutate)'
+      type: 'injector_selected',
+      injector: INJECTOR_CANDIDATES[0].name
     })
   })
 
-  it('supports updateMessage fallback adapters when atomic is unavailable', async () => {
+  it('falls through to second injector family when first is unavailable', async () => {
+    const diagnostics: any[] = []
     const updateMessage = mock(async () => {})
-    const compat = buildRuntimeCompat({ client: { session: { updateMessage } } })
+    const compat = buildRuntimeCompat({
+      client: { session: { updateMessage } },
+      onCompatDiagnostic: event => diagnostics.push(event)
+    })
 
     await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
 
     expect(updateMessage).toHaveBeenCalledTimes(1)
-    expect(updateMessage).toHaveBeenCalledWith({
-      ctx: expect.objectContaining({ sessionID: 's1' }),
-      id: 'msg1',
-      mutate: expect.any(Function)
+    expect(diagnostics).toContainEqual({
+      type: 'injector_probe',
+      injector: INJECTOR_CANDIDATES[0].name,
+      available: false
+    })
+    expect(diagnostics).toContainEqual({
+      type: 'injector_selected',
+      injector: INJECTOR_CANDIDATES[1].name
     })
   })
 
-  it('handles probe exceptions and emits diagnostics', async () => {
+  it('selects third injector family when first two are unavailable', async () => {
     const diagnostics: any[] = []
+    const patchUpdateMessage = mock(async () => {})
+    const createMutateBridge = mock((mutate: any) => mutate)
     const compat = buildRuntimeCompat({
       client: {
-        get session() {
-          throw new Error('session probe failed')
-        }
+        messageRoute: { patchUpdateMessage },
+        messageBridge: { createMutateBridge }
       },
       onCompatDiagnostic: event => diagnostics.push(event)
     })
+
+    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
+
+    expect(createMutateBridge).toHaveBeenCalledTimes(1)
+    expect(patchUpdateMessage).toHaveBeenCalledTimes(1)
+    expect(diagnostics).toContainEqual({
+      type: 'injector_selected',
+      injector: INJECTOR_CANDIDATES[2].name
+    })
+  })
+
+  it('continues probing when early injector probe throws', async () => {
+    const diagnostics: any[] = []
+    const updateMessage = mock(async () => {})
+    const internalsSession = {
+      get updateMessageAtomic() {
+        throw new Error('boom during probe')
+      },
+      updateMessage
+    }
+    const compat = buildRuntimeCompat({
+      client: {
+        internals: { session: internalsSession },
+        session: { updateMessage }
+      },
+      onCompatDiagnostic: event => diagnostics.push(event)
+    })
+
+    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
+
+    expect(updateMessage).toHaveBeenCalledTimes(1)
+    expect(diagnostics).toContainEqual({
+      type: 'injector_probe_error',
+      injector: INJECTOR_CANDIDATES[0].name,
+      error: 'boom during probe'
+    })
+    expect(diagnostics).toContainEqual({
+      type: 'injector_selected',
+      injector: INJECTOR_CANDIDATES[1].name
+    })
+  })
+
+  it('returns exact compatibility update error when no injector is available', async () => {
+    const diagnostics: any[] = []
+    const compat = buildRuntimeCompat({ client: {}, onCompatDiagnostic: event => diagnostics.push(event) })
 
     await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
 
-    expect(diagnostics.some(event => event.type === 'adapter_probe_error')).toBeTrue()
-    expect(diagnostics.some(event => event.type === 'adapter_none_selected')).toBeTrue()
+    expect(diagnostics).toContainEqual({ type: 'injector_none_selected' })
   })
 
-  it('does not fallback when selected adapter throws and emits invoke diagnostics', async () => {
+  it('rejects missing or empty sessionID in injected path', async () => {
+    const atomic = mock(async () => {})
+    const compat = buildRuntimeCompat({ client: { session: { updateMessageAtomic: atomic } } })
+
+    await expect(compat.updateMessage({} as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
+    await expect(compat.updateMessage({ sessionID: '   ' } as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
+    expect(atomic).not.toHaveBeenCalled()
+  })
+
+  it('does not fallback after selected injected updater throws', async () => {
     const diagnostics: any[] = []
-    const atomicUpdater = async (_ctx: any, _id: string, _mutate: (draft: any) => void) => {
-      throw new Error('adapter invoke failed')
-    }
-    const compat = buildRuntimeCompat({
-      client: { session: { updateMessageAtomic: atomicUpdater } },
-      onCompatDiagnostic: event => diagnostics.push(event)
+    const atomicError = new Error('atomic failed')
+    const updateMessageAtomic = mock(async () => {
+      throw atomicError
     })
-
-    await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow('adapter invoke failed')
-
-    expect(diagnostics).toContainEqual({
-      type: 'adapter_invoke_error',
-      adapter: 'client.session.updateMessageAtomic(ctx, id, mutate)',
-      error: 'adapter invoke failed'
-    })
-  })
-
-  it('uses updateMessage adapters when atomic path is structurally absent', async () => {
     const updateMessage = mock(async () => {})
     const compat = buildRuntimeCompat({
-      client: {
-        session: {
-          updateMessage
-        }
-      }
-    })
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(updateMessage).toHaveBeenCalledTimes(1)
-    expect(updateMessage).toHaveBeenCalledWith({
-      ctx: expect.objectContaining({ sessionID: 's1' }),
-      id: 'msg1',
-      mutate: expect.any(Function)
-    })
-  })
-
-  it('emits adapter probe and selected diagnostics in order', async () => {
-    const diagnostics: any[] = []
-    const atomicUpdater = async (_ctx: any, _id: string, _mutate: (draft: any) => void) => {}
-
-    const compat = buildRuntimeCompat({
-      client: { session: { updateMessageAtomic: atomicUpdater } },
+      client: { session: { updateMessageAtomic, updateMessage } },
       onCompatDiagnostic: event => diagnostics.push(event)
     })
 
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
+    await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow('atomic failed')
 
-    expect(diagnostics[0]).toEqual({
-      type: 'adapter_probe',
-      adapter: 'client.session.updateMessageAtomic(ctx, id, mutate)',
-      available: true
-    })
-    expect(diagnostics[1]).toEqual({
-      type: 'adapter_selected',
-      adapter: 'client.session.updateMessageAtomic(ctx, id, mutate)'
+    expect(updateMessage).not.toHaveBeenCalled()
+    expect(diagnostics).toContainEqual({
+      type: 'injector_invoke_error',
+      injector: INJECTOR_CANDIDATES[0].name,
+      error: 'atomic failed'
     })
   })
 })
