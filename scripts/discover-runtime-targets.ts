@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
+import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 type RuntimeName = 'stock' | 'local'
 type ProbeKind = 'registry' | 'updater'
@@ -34,6 +34,7 @@ type ProbeEntryArtifact = ProbeEntrySpec & {
 type DiscoveryArtifact = {
   schemaVersion: '1'
   generatedAt: string
+  reproducibilityHash: string
   runtime: {
     name: RuntimeName
     binary: string
@@ -54,12 +55,26 @@ type DiscoveryArtifact = {
   }
 }
 
+type RuntimeProbeContext = {
+  contextDir: string
+  localModuleRoots: string[]
+}
+
+type WorkerProbeResult = {
+  entries: ProbeEntryArtifact[]
+  negativeControls: DiscoveryArtifact['negativeControls']
+  unexpectedNegativeControlSuccesses: string[]
+}
+
 const RUNTIME_BINARIES: Record<RuntimeName, string> = {
   stock: '/home/basil/.opencode/bin/opencode',
   local: '/home/basil/projects/opencode_context_management/opencode/packages/opencode/dist/opencode-linux-x64/bin/opencode'
 }
 
-const LOCAL_OPENCODE_SRC_ROOT = '/home/basil/projects/opencode_context_management/opencode/packages/opencode/src'
+const NEGATIVE_CONTROLS = [
+  { specifier: '@opencode-ai/opencode/definitely-not-real', exportPath: 'Nope.missing' },
+  { specifier: '@opencode-ai/opencode/tool/registry', exportPath: 'Nope.missing' }
+] as const
 
 const PROBE_MATRIX: ProbeEntrySpec[] = [
   { id: 'REG-001', kind: 'registry', specifier: '@opencode-ai/opencode/tool/registry', exportPath: 'PluginToolRegistry.fromPlugin', expectedContract: 'fromPlugin' },
@@ -77,6 +92,173 @@ const PROBE_MATRIX: ProbeEntrySpec[] = [
   { id: 'UPD-009', kind: 'updater', specifier: '@opencode-ai/opencode/message-route', exportPath: 'MessageRoute.patchUpdateMessage', expectedContract: 'patchUpdateMessage' },
   { id: 'UPD-010', kind: 'updater', specifier: 'opencode/message-route', exportPath: 'MessageRoute.patchUpdateMessage', expectedContract: 'patchUpdateMessage' }
 ]
+
+const WORKER_SCRIPT = String.raw`
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const payload = JSON.parse(process.argv[1])
+
+function readNestedValue(target, exportPath) {
+  const parts = exportPath.split('.').filter(Boolean)
+  if (parts.length === 0) {
+    return { owner: undefined, value: undefined }
+  }
+  let owner = target
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    owner = owner?.[parts[index]]
+  }
+  return { owner, value: owner?.[parts[parts.length - 1]] }
+}
+
+function isModuleNotFound(error) {
+  const code = error && typeof error === 'object' ? error.code : undefined
+  if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') {
+    return true
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  return /Cannot find module|Module not found|ResolveMessage: Cannot find module/.test(message)
+}
+
+function mapSpecifierSubpath(specifier) {
+  const namespacedPrefix = '@opencode-ai/opencode/'
+  const unscopedPrefix = 'opencode/'
+  if (specifier.startsWith(namespacedPrefix)) return specifier.slice(namespacedPrefix.length)
+  if (specifier.startsWith(unscopedPrefix)) return specifier.slice(unscopedPrefix.length)
+  return null
+}
+
+async function resolveSpecifier(specifier, localModuleRoots) {
+  try {
+    return await import(specifier)
+  } catch (directError) {
+    const subpath = mapSpecifierSubpath(specifier)
+    if (!subpath || localModuleRoots.length === 0) {
+      throw directError
+    }
+
+    const paths = []
+    for (const root of localModuleRoots) {
+      paths.push(path.join(root, subpath + '.ts'))
+      paths.push(path.join(root, subpath + '.js'))
+      paths.push(path.join(root, subpath, 'index.ts'))
+      paths.push(path.join(root, subpath, 'index.js'))
+    }
+
+    let fallbackError = directError
+    for (const candidate of paths) {
+      try {
+        return await import(pathToFileURL(candidate).href)
+      } catch (error) {
+        fallbackError = error
+      }
+    }
+    throw fallbackError
+  }
+}
+
+function classifyFound(spec, located) {
+  const foundType = typeof located.value
+  const ownerType = typeof located.owner
+  if (foundType !== 'function') {
+    return {
+      ...spec,
+      result: {
+        status: 'not_callable',
+        typeof: foundType,
+        arity: 0,
+        ownerType,
+        errorClass: 'not_callable',
+        errorMessage: 'Resolved export is not callable: ' + spec.specifier + ':' + spec.exportPath
+      }
+    }
+  }
+
+  return {
+    ...spec,
+    result: {
+      status: 'callable',
+      typeof: 'function',
+      arity: located.value.length,
+      ownerType,
+      errorClass: null,
+      errorMessage: null
+    }
+  }
+}
+
+async function probeEntry(spec, localModuleRoots) {
+  let moduleNamespace
+  try {
+    moduleNamespace = await resolveSpecifier(spec.specifier, localModuleRoots)
+  } catch (error) {
+    const moduleNotFound = isModuleNotFound(error)
+    return {
+      ...spec,
+      result: {
+        status: moduleNotFound ? 'missing' : 'invoke_failed',
+        typeof: 'undefined',
+        arity: 0,
+        ownerType: 'undefined',
+        errorClass: moduleNotFound ? 'module_not_found' : 'invoke_failed',
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  const roots = [moduleNamespace, moduleNamespace?.default].filter(root => root !== undefined)
+  for (const root of roots) {
+    const located = readNestedValue(root, spec.exportPath)
+    if (located.value === undefined) continue
+    return classifyFound(spec, located)
+  }
+
+  return {
+    ...spec,
+    result: {
+      status: 'missing',
+      typeof: 'undefined',
+      arity: 0,
+      ownerType: 'undefined',
+      errorClass: 'export_path_missing',
+      errorMessage: 'Missing export path: ' + spec.specifier + ':' + spec.exportPath
+    }
+  }
+}
+
+async function run() {
+  const entries = []
+  for (const spec of payload.probes) {
+    entries.push(await probeEntry(spec, payload.localModuleRoots))
+  }
+
+  const negativeControls = []
+  const unexpectedNegativeControlSuccesses = []
+  for (const control of payload.negativeControls) {
+    try {
+      const namespace = await resolveSpecifier(control.specifier, payload.localModuleRoots)
+      const roots = [namespace, namespace?.default].filter(root => root !== undefined)
+      const hasPath = roots.some(root => readNestedValue(root, control.exportPath).value !== undefined)
+      if (hasPath) {
+        unexpectedNegativeControlSuccesses.push(control.specifier + ':' + control.exportPath)
+      }
+      negativeControls.push({ ...control, status: 'missing' })
+    } catch (error) {
+      negativeControls.push({
+        ...control,
+        status: isModuleNotFound(error) ? 'module_not_found' : 'missing'
+      })
+    }
+  }
+
+  process.stdout.write(JSON.stringify({ entries, negativeControls, unexpectedNegativeControlSuccesses }))
+}
+
+run().catch(error => {
+  process.stderr.write(error instanceof Error ? error.message : String(error))
+  process.exit(1)
+})
+`
 
 export function parseCliArgs(argv: string[]): { runtime: RuntimeName; out: string } {
   let runtime: RuntimeName | undefined
@@ -125,188 +307,63 @@ export function parseCliArgs(argv: string[]): { runtime: RuntimeName; out: strin
   return { runtime, out }
 }
 
-function readNestedValue(target: any, exportPath: string): { owner: any; value: any } {
-  const parts = exportPath.split('.').filter(Boolean)
-  if (parts.length === 0) {
-    return { owner: undefined, value: undefined }
+async function findLocalModuleRoot(binaryPath: string): Promise<string | null> {
+  let current = path.dirname(binaryPath)
+  const root = path.parse(current).root
+
+  while (current !== root) {
+    const candidate = path.join(current, 'packages', 'opencode', 'src')
+    if (await Bun.file(path.join(candidate, 'session.ts')).exists()) {
+      return candidate
+    }
+    current = path.dirname(current)
   }
 
-  let owner = target
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    owner = owner?.[parts[index]]
-  }
-  const value = owner?.[parts[parts.length - 1]]
-  return { owner, value }
+  return null
 }
 
-function isModuleNotFound(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false
-  }
-  const maybeCode = (error as any).code
-  return maybeCode === 'ERR_MODULE_NOT_FOUND' || maybeCode === 'MODULE_NOT_FOUND'
-}
-
-async function resolveSpecifier(runtime: RuntimeName, specifier: string): Promise<any> {
-  try {
-    return await import(specifier)
-  } catch (directError) {
-    if (runtime !== 'local') {
-      throw directError
-    }
-
-    const mapped = mapLocalSpecifier(specifier)
-    if (!mapped) {
-      throw directError
-    }
-    return await import(pathToFileURL(mapped).href)
-  }
-}
-
-function mapLocalSpecifier(specifier: string): string | null {
-  const namespacedPrefix = '@opencode-ai/opencode/'
-  const unscopedPrefix = 'opencode/'
-  const subpath = specifier.startsWith(namespacedPrefix)
-    ? specifier.slice(namespacedPrefix.length)
-    : specifier.startsWith(unscopedPrefix)
-      ? specifier.slice(unscopedPrefix.length)
-      : null
-
-  if (!subpath) {
-    return null
-  }
-
-  return path.join(LOCAL_OPENCODE_SRC_ROOT, `${subpath}.ts`)
-}
-
-function invokeProbe(contract: ExpectedContract, fn: (...args: any[]) => any, owner: any): Promise<void> {
-  if (contract === 'fromPlugin') {
-    return Promise.resolve()
-  }
-  if (contract === 'updateMessageAtomic' || contract === 'updateMessage') {
-    return Promise.resolve(fn.call(owner, {
-      sessionID: 'session_discovery',
-      messageID: 'msg_discovery',
-      mutate: () => undefined
-    })).then(() => undefined)
-  }
-
-  return Promise.resolve(fn.call(owner, {
-    sessionID: 'session_discovery',
-    messageID: 'msg_discovery',
-    mutateBridge: () => undefined
-  })).then(() => undefined)
-}
-
-async function probeEntry(runtime: RuntimeName, spec: ProbeEntrySpec): Promise<ProbeEntryArtifact> {
-  let moduleNamespace: any
-  try {
-    moduleNamespace = await resolveSpecifier(runtime, spec.specifier)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return {
-      ...spec,
-      result: {
-        status: 'missing',
-        typeof: 'undefined',
-        arity: 0,
-        ownerType: 'undefined',
-        errorClass: isModuleNotFound(error) ? 'module_not_found' : 'module_not_found',
-        errorMessage: message
-      }
-    }
-  }
-
-  const roots = [moduleNamespace, moduleNamespace?.default].filter(root => root !== undefined)
-
-  for (const root of roots) {
-    const located = readNestedValue(root, spec.exportPath)
-    if (located.value === undefined) {
-      continue
-    }
-
-    const foundType = typeof located.value
-    const ownerType = typeof located.owner
-    if (foundType !== 'function') {
-      return {
-        ...spec,
-        result: {
-          status: 'not_callable',
-          typeof: foundType,
-          arity: 0,
-          ownerType,
-          errorClass: 'not_callable',
-          errorMessage: `Resolved export is not callable: ${spec.specifier}:${spec.exportPath}`
-        }
-      }
-    }
-
-    const fn = located.value as (...args: any[]) => any
-    try {
-      await invokeProbe(spec.expectedContract, fn, located.owner)
-      return {
-        ...spec,
-        result: {
-          status: 'callable',
-          typeof: 'function',
-          arity: fn.length,
-          ownerType,
-          errorClass: null,
-          errorMessage: null
-        }
-      }
-    } catch (error) {
-      return {
-        ...spec,
-        result: {
-          status: 'invoke_failed',
-          typeof: 'function',
-          arity: fn.length,
-          ownerType,
-          errorClass: 'invoke_failed',
-          errorMessage: error instanceof Error ? error.message : String(error)
-        }
-      }
-    }
-  }
+export async function discoverRuntimeProbeContext(runtime: RuntimeName): Promise<RuntimeProbeContext> {
+  const binaryPath = RUNTIME_BINARIES[runtime]
+  const binDir = path.dirname(binaryPath)
+  const installRoot = path.dirname(binDir)
+  const discoveredLocalRoot = await findLocalModuleRoot(binaryPath)
 
   return {
-    ...spec,
-    result: {
-      status: 'missing',
-      typeof: 'undefined',
-      arity: 0,
-      ownerType: 'undefined',
-      errorClass: 'export_path_missing',
-      errorMessage: `Missing export path: ${spec.specifier}:${spec.exportPath}`
-    }
+    contextDir: installRoot,
+    localModuleRoots: discoveredLocalRoot ? [discoveredLocalRoot] : []
   }
 }
 
-async function runNegativeControls(runtime: RuntimeName): Promise<DiscoveryArtifact['negativeControls']> {
-  const controls = [
-    { specifier: '@opencode-ai/opencode/definitely-not-real', exportPath: 'Nope.missing' },
-    { specifier: '@opencode-ai/opencode/tool/registry', exportPath: 'Nope.missing' }
-  ]
+export async function runProbeWorker(
+  context: RuntimeProbeContext,
+  probes: ProbeEntrySpec[],
+  negativeControls: Array<{ specifier: string; exportPath: string }>
+): Promise<WorkerProbeResult> {
+  const payload = JSON.stringify({ probes, negativeControls, localModuleRoots: context.localModuleRoots })
+  const proc = Bun.spawn([process.execPath, '-e', WORKER_SCRIPT, payload], {
+    cwd: context.contextDir,
+    stdout: 'pipe',
+    stderr: 'pipe'
+  })
 
-  const results: DiscoveryArtifact['negativeControls'] = []
-  for (const control of controls) {
-    try {
-      const namespace = await resolveSpecifier(runtime, control.specifier)
-      const roots = [namespace, namespace?.default].filter(root => root !== undefined)
-      const hasPath = roots.some(root => readNestedValue(root, control.exportPath).value !== undefined)
-      results.push({
-        ...control,
-        status: hasPath ? 'missing' : 'missing'
-      })
-    } catch {
-      results.push({
-        ...control,
-        status: 'module_not_found'
-      })
-    }
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited
+  ])
+
+  if (code !== 0) {
+    throw new Error(`runtime probe worker failed: ${(stderr || stdout).trim()}`)
   }
-  return results
+
+  return JSON.parse(stdout) as WorkerProbeResult
+}
+
+export function assertNegativeControls(results: WorkerProbeResult): void {
+  if (results.unexpectedNegativeControlSuccesses.length === 0) {
+    return
+  }
+  throw new Error(`Negative control unexpectedly resolved: ${results.unexpectedNegativeControlSuccesses.join(', ')}`)
 }
 
 export function summarizeEntries(entries: ProbeEntryArtifact[]): DiscoveryArtifact['summary'] {
@@ -336,20 +393,30 @@ export function summarizeEntries(entries: ProbeEntryArtifact[]): DiscoveryArtifa
     }
   }
 
-  return {
-    resolvedCount,
-    callableCount,
-    missingCount,
-    invokeFailedCount
+  return { resolvedCount, callableCount, missingCount, invokeFailedCount }
+}
+
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => sortKeysDeep(item))
   }
+  if (value && typeof value === 'object') {
+    const sorted: Record<string, unknown> = {}
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = sortKeysDeep((value as Record<string, unknown>)[key])
+    }
+    return sorted
+  }
+  return value
+}
+
+export function computeReproducibilityHash(input: Omit<DiscoveryArtifact, 'generatedAt' | 'reproducibilityHash'>): string {
+  const canonical = JSON.stringify(sortKeysDeep(input))
+  return createHash('sha256').update(canonical).digest('hex')
 }
 
 async function readRuntimeVersion(binaryPath: string): Promise<string> {
-  const proc = Bun.spawn([binaryPath, '--version'], {
-    stdout: 'pipe',
-    stderr: 'pipe'
-  })
-
+  const proc = Bun.spawn([binaryPath, '--version'], { stdout: 'pipe', stderr: 'pipe' })
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -360,30 +427,33 @@ async function readRuntimeVersion(binaryPath: string): Promise<string> {
     const tail = `${stdout}\n${stderr}`.trim()
     throw new Error(`Failed to read runtime version (${binaryPath}): ${tail}`)
   }
-
   return stdout.trim() || stderr.trim() || 'unknown'
 }
 
 export async function discoverRuntimeTargets(runtime: RuntimeName): Promise<DiscoveryArtifact> {
+  const context = await discoverRuntimeProbeContext(runtime)
   const binary = RUNTIME_BINARIES[runtime]
   const reportedVersion = await readRuntimeVersion(binary)
-  const entries: ProbeEntryArtifact[] = []
+  const workerResults = await runProbeWorker(context, PROBE_MATRIX, NEGATIVE_CONTROLS as any)
+  assertNegativeControls(workerResults)
 
-  for (const probe of PROBE_MATRIX) {
-    entries.push(await probeEntry(runtime, probe))
-  }
-
-  const negativeControls = await runNegativeControls(runtime)
+  const entries = workerResults.entries
+  const negativeControls = workerResults.negativeControls
   const summary = summarizeEntries(entries)
+  const reproducibilityHash = computeReproducibilityHash({
+    schemaVersion: '1',
+    runtime: { name: runtime, binary, reportedVersion },
+    probeMatrixVersion: 'v1',
+    entries,
+    negativeControls,
+    summary
+  })
 
   return {
     schemaVersion: '1',
     generatedAt: new Date().toISOString(),
-    runtime: {
-      name: runtime,
-      binary,
-      reportedVersion
-    },
+    reproducibilityHash,
+    runtime: { name: runtime, binary, reportedVersion },
     probeMatrixVersion: 'v1',
     entries,
     negativeControls,
@@ -402,6 +472,7 @@ async function main(): Promise<void> {
   const { resolvedCount, callableCount, missingCount, invokeFailedCount } = artifact.summary
   console.log(`runtime=${artifact.runtime.name} version=${artifact.runtime.reportedVersion} out=${outPath}`)
   console.log(`summary resolved=${resolvedCount} callable=${callableCount} missing=${missingCount} invoke_failed=${invokeFailedCount}`)
+  console.log(`reproducibilityHash=${artifact.reproducibilityHash}`)
 }
 
 if (import.meta.main) {
