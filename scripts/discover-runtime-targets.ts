@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 type RuntimeName = 'stock' | 'local'
@@ -25,6 +25,9 @@ type ProbeEntryResult = {
   ownerType: string
   errorClass: ProbeErrorClass
   errorMessage: string | null
+  evidence?: string
+  resolution?: 'direct_import' | 'local_root_fallback' | 'not_resolved'
+  attemptedPaths?: string[]
 }
 
 type ProbeEntryArtifact = ProbeEntrySpec & {
@@ -53,6 +56,11 @@ type DiscoveryArtifact = {
     missingCount: number
     invokeFailedCount: number
   }
+  diagnostics: Array<{
+    level: 'info' | 'warn'
+    code: string
+    message: string
+  }>
 }
 
 type RuntimeProbeContext = {
@@ -129,14 +137,17 @@ function mapSpecifierSubpath(specifier) {
 }
 
 async function resolveSpecifier(specifier, localModuleRoots) {
+  const attemptedPaths = ['import:' + specifier]
   try {
-    return await import(specifier)
+    const namespace = await import(specifier)
+    return { namespace, resolution: 'direct_import', attemptedPaths }
   } catch (directError) {
     if (!isModuleNotFound(directError)) {
       throw directError
     }
     const subpath = mapSpecifierSubpath(specifier)
     if (!subpath || localModuleRoots.length === 0) {
+      directError.__probeAttemptedPaths = attemptedPaths
       throw directError
     }
 
@@ -147,11 +158,13 @@ async function resolveSpecifier(specifier, localModuleRoots) {
       paths.push(path.join(root, subpath, 'index.ts'))
       paths.push(path.join(root, subpath, 'index.js'))
     }
+    attemptedPaths.push(...paths.map(candidate => 'file:' + candidate))
 
     let fallbackError = directError
     for (const candidate of paths) {
       try {
-        return await import(pathToFileURL(candidate).href)
+        const namespace = await import(pathToFileURL(candidate).href)
+        return { namespace, resolution: 'local_root_fallback', attemptedPaths }
       } catch (error) {
         if (!isModuleNotFound(error)) {
           throw error
@@ -159,11 +172,12 @@ async function resolveSpecifier(specifier, localModuleRoots) {
         fallbackError = error
       }
     }
+    fallbackError.__probeAttemptedPaths = attemptedPaths
     throw fallbackError
   }
 }
 
-function classifyFound(spec, located) {
+function classifyFound(spec, located, resolution, attemptedPaths) {
   const foundType = typeof located.value
   const ownerType = typeof located.owner
   if (foundType !== 'function') {
@@ -175,7 +189,48 @@ function classifyFound(spec, located) {
         arity: 0,
         ownerType,
         errorClass: 'not_callable',
-        errorMessage: 'Resolved export is not callable: ' + spec.specifier + ':' + spec.exportPath
+        errorMessage: 'Resolved export is not callable: ' + spec.specifier + ':' + spec.exportPath,
+        evidence: 'resolved symbol type=' + foundType,
+        resolution,
+        attemptedPaths
+      }
+    }
+  }
+
+  if (spec.expectedContract === 'fromPlugin') {
+    try {
+      const fakePlugin = { execute: async () => {} }
+      const wrapped = located.value.call(located.owner, fakePlugin)
+      if (typeof wrapped?.execute !== 'function') {
+        return {
+          ...spec,
+          result: {
+            status: 'invoke_failed',
+            typeof: 'function',
+            arity: located.value.length,
+            ownerType,
+            errorClass: 'invoke_failed',
+            errorMessage: 'fromPlugin contract check failed: returned value missing execute() function',
+            evidence: 'fromPlugin returned type=' + typeof wrapped + ' executeType=' + typeof wrapped?.execute,
+            resolution,
+            attemptedPaths
+          }
+        }
+      }
+    } catch (error) {
+      return {
+        ...spec,
+        result: {
+          status: 'invoke_failed',
+          typeof: 'function',
+          arity: located.value.length,
+          ownerType,
+          errorClass: 'invoke_failed',
+          errorMessage: error instanceof Error ? error.message : String(error),
+          evidence: 'fromPlugin threw during contract check',
+          resolution,
+          attemptedPaths
+        }
       }
     }
   }
@@ -188,17 +243,24 @@ function classifyFound(spec, located) {
       arity: located.value.length,
       ownerType,
       errorClass: null,
-      errorMessage: null
+      errorMessage: null,
+      evidence:
+        spec.expectedContract === 'fromPlugin'
+          ? 'fromPlugin returned wrapper with execute() function'
+          : 'resolved function symbol; invocation skipped to avoid side effects',
+      resolution,
+      attemptedPaths
     }
   }
 }
 
 async function probeEntry(spec, localModuleRoots) {
-  let moduleNamespace
+  let resolved
   try {
-    moduleNamespace = await resolveSpecifier(spec.specifier, localModuleRoots)
+    resolved = await resolveSpecifier(spec.specifier, localModuleRoots)
   } catch (error) {
     const moduleNotFound = isModuleNotFound(error)
+    const attemptedPaths = Array.isArray(error?.__probeAttemptedPaths) ? error.__probeAttemptedPaths : ['import:' + spec.specifier]
     return {
       ...spec,
       result: {
@@ -207,16 +269,22 @@ async function probeEntry(spec, localModuleRoots) {
         arity: 0,
         ownerType: 'undefined',
         errorClass: moduleNotFound ? 'module_not_found' : 'invoke_failed',
-        errorMessage: error instanceof Error ? error.message : String(error)
+        errorMessage: error instanceof Error ? error.message : String(error),
+        evidence: moduleNotFound ? 'module resolver could not locate candidate specifier' : 'module import threw non-resolution error',
+        resolution: 'not_resolved',
+        attemptedPaths
       }
     }
   }
 
+  const moduleNamespace = resolved.namespace
+  const resolution = resolved.resolution
+  const attemptedPaths = resolved.attemptedPaths
   const roots = [moduleNamespace, moduleNamespace?.default].filter(root => root !== undefined)
   for (const root of roots) {
     const located = readNestedValue(root, spec.exportPath)
     if (located.value === undefined) continue
-    return classifyFound(spec, located)
+    return classifyFound(spec, located, resolution, attemptedPaths)
   }
 
   return {
@@ -227,7 +295,10 @@ async function probeEntry(spec, localModuleRoots) {
       arity: 0,
       ownerType: 'undefined',
       errorClass: 'export_path_missing',
-      errorMessage: 'Missing export path: ' + spec.specifier + ':' + spec.exportPath
+      errorMessage: 'Missing export path: ' + spec.specifier + ':' + spec.exportPath,
+      evidence: 'module resolved but export path was undefined',
+      resolution,
+      attemptedPaths
     }
   }
 }
@@ -242,7 +313,8 @@ async function run() {
   const unexpectedNegativeControlSuccesses = []
   for (const control of payload.negativeControls) {
     try {
-      const namespace = await resolveSpecifier(control.specifier, payload.localModuleRoots)
+      const resolved = await resolveSpecifier(control.specifier, payload.localModuleRoots)
+      const namespace = resolved.namespace
       const roots = [namespace, namespace?.default].filter(root => root !== undefined)
       const hasPath = roots.some(root => readNestedValue(root, control.exportPath).value !== undefined)
       if (hasPath) {
@@ -313,19 +385,77 @@ export function parseCliArgs(argv: string[]): { runtime: RuntimeName; out: strin
   return { runtime, out }
 }
 
-async function findLocalModuleRoot(binaryPath: string): Promise<string | null> {
-  let current = path.dirname(binaryPath)
-  const root = path.parse(current).root
+type ModuleRootCandidate = {
+  path: string
+  score: number
+}
 
-  while (current !== root) {
-    const candidate = path.join(current, 'packages', 'opencode', 'src')
-    if (await Bun.file(path.join(candidate, 'session.ts')).exists()) {
-      return candidate
+const MODULE_ROOT_MARKERS: string[][] = [
+  ['session.ts', 'session.js', 'session/index.ts', 'session/index.js'],
+  ['tool/registry.ts', 'tool/registry.js', 'tool/registry/index.ts', 'tool/registry/index.js'],
+  ['message-route.ts', 'message-route.js', 'message-route/index.ts', 'message-route/index.js']
+]
+
+async function markerGroupExists(rootPath: string, markers: string[]): Promise<boolean> {
+  for (const marker of markers) {
+    if (await Bun.file(path.join(rootPath, marker)).exists()) {
+      return true
     }
-    current = path.dirname(current)
+  }
+  return false
+}
+
+async function scoreModuleRootCandidate(candidatePath: string): Promise<ModuleRootCandidate> {
+  let score = 0
+  for (const markerGroup of MODULE_ROOT_MARKERS) {
+    if (await markerGroupExists(candidatePath, markerGroup)) {
+      score += 1
+    }
+  }
+  return { path: candidatePath, score }
+}
+
+export async function findLocalModuleRoot(binaryPath: string): Promise<string | null> {
+  const startDirs = [path.dirname(binaryPath)]
+  try {
+    const resolvedDir = path.dirname(await realpath(binaryPath))
+    if (!startDirs.includes(resolvedDir)) {
+      startDirs.push(resolvedDir)
+    }
+  } catch {
+    // Keep scanning from unresolved binary path when realpath fails.
+  }
+  const seen = new Set<string>()
+  const candidates: string[] = []
+
+  for (const start of startDirs) {
+    let current = start
+    const root = path.parse(current).root
+    while (true) {
+      const candidate = path.join(current, 'packages', 'opencode', 'src')
+      if (!seen.has(candidate)) {
+        seen.add(candidate)
+        candidates.push(candidate)
+      }
+      if (current === root) {
+        break
+      }
+      current = path.dirname(current)
+    }
   }
 
-  return null
+  let best: ModuleRootCandidate | undefined
+  for (const candidate of candidates) {
+    const scored = await scoreModuleRootCandidate(candidate)
+    if (scored.score < 2) {
+      continue
+    }
+    if (!best || scored.score > best.score) {
+      best = scored
+    }
+  }
+
+  return best?.path ?? null
 }
 
 export async function discoverRuntimeProbeContext(runtime: RuntimeName): Promise<RuntimeProbeContext> {
@@ -446,13 +576,46 @@ export async function discoverRuntimeTargets(runtime: RuntimeName): Promise<Disc
   const entries = workerResults.entries
   const negativeControls = workerResults.negativeControls
   const summary = summarizeEntries(entries)
+  const diagnostics: DiscoveryArtifact['diagnostics'] = []
+
+  if (context.localModuleRoots.length === 0) {
+    diagnostics.push({
+      level: 'warn',
+      code: 'local_root_not_found',
+      message: `No local module root discovered from binary path ${binary}; module fallback probing disabled.`
+    })
+  } else {
+    diagnostics.push({
+      level: 'info',
+      code: 'local_root_discovered',
+      message: `Discovered local module root(s): ${context.localModuleRoots.join(', ')}`
+    })
+  }
+
+  const callableRegistry = entries.filter(entry => entry.kind === 'registry' && entry.result.status === 'callable').length
+  const callableUpdater = entries.filter(entry => entry.kind === 'updater' && entry.result.status === 'callable').length
+  if (callableRegistry === 0 || callableUpdater === 0) {
+    diagnostics.push({
+      level: 'warn',
+      code: 'callable_gate_unmet',
+      message: `Callable gate unmet (registry=${callableRegistry}, updater=${callableUpdater}); inspect entries[*].result.{errorClass,evidence,attemptedPaths}.`
+    })
+  } else {
+    diagnostics.push({
+      level: 'info',
+      code: 'callable_gate_met',
+      message: `Callable gate met (registry=${callableRegistry}, updater=${callableUpdater}).`
+    })
+  }
+
   const reproducibilityHash = computeReproducibilityHash({
     schemaVersion: '1',
     runtime: { name: runtime, binary, reportedVersion },
     probeMatrixVersion: 'v1',
     entries,
     negativeControls,
-    summary
+    summary,
+    diagnostics
   })
 
   return {
@@ -463,7 +626,8 @@ export async function discoverRuntimeTargets(runtime: RuntimeName): Promise<Disc
     probeMatrixVersion: 'v1',
     entries,
     negativeControls,
-    summary
+    summary,
+    diagnostics
   }
 }
 
