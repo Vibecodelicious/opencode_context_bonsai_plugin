@@ -75,6 +75,7 @@ Troubleshooting notes:
 - Injected updater calls reject missing or empty `ctx.sessionID` with the same exact compatibility update error.
 - Selected injector invocation failures are treated as native runtime failures and are propagated unchanged (not rewritten as compatibility errors).
 - For debug instrumentation in custom integration tests, `buildRuntimeCompat` accepts `onCompatDiagnostic(event)` with probe/selection/source/invoke diagnostics (`injector_*`, `injector_source`, `update_path`).
+- Generate runtime target evidence artifacts with `bun run scripts/discover-runtime-targets.ts --runtime <stock|local> --out /tmp/runtime-discovery-<runtime>.json`.
 
 Compatibility errors are returned as exact tool output strings:
 
