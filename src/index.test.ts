@@ -65,6 +65,30 @@ describe("contextBonsai", () => {
     expect(result).toBe("Restored 1 messages from range msg1 to msg1. Original content is now visible.")
     expect(atomicUpdater).toHaveBeenCalledTimes(1)
   })
+
+  test("emits compat diagnostics to stderr when enabled", async () => {
+    const previous = process.env.CONTEXT_BONSAI_COMPAT_DIAGNOSTICS
+    process.env.CONTEXT_BONSAI_COMPAT_DIAGNOSTICS = "1"
+    const errorSpy = mock(() => {})
+    const originalError = console.error
+    console.error = errorSpy as any
+
+    try {
+      await contextBonsai({
+        client: {
+          session: {
+            updateMessageAtomic: async () => {}
+          }
+        }
+      } as any)
+    } finally {
+      console.error = originalError
+      if (previous === undefined) delete process.env.CONTEXT_BONSAI_COMPAT_DIAGNOSTICS
+      else process.env.CONTEXT_BONSAI_COMPAT_DIAGNOSTICS = previous
+    }
+
+    expect(errorSpy).toHaveBeenCalled()
+  })
 })
 
 describe("message conversion", () => {

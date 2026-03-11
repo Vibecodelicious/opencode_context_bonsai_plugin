@@ -75,86 +75,112 @@ describe('runtime compatibility', () => {
     expect(injectedUpdater).not.toHaveBeenCalled()
   })
 
-  it('selects first injector family and emits injector diagnostics', async () => {
+  it('classifies marker-tagged context updateMessage as injected path', async () => {
+    const diagnostics: any[] = []
+    const updater = mock(async () => {})
+    ;(updater as any).__contextBonsaiInjected = true
+    ;(updater as any).__contextBonsaiInjector = 'injected-test'
+    ;(updater as any).__contextBonsaiSource = 'module'
+    const compat = createRuntimeCompat({ onCompatDiagnostic: event => diagnostics.push(event) })
+
+    await compat.updateMessage({ updateMessage: updater } as any, 'msg1', () => {})
+
+    expect(diagnostics).toContainEqual({
+      type: 'update_path',
+      path: 'injectedUpdater',
+      injector: 'injected-test',
+      source: 'module'
+    })
+  })
+
+  it('selects module injector first and emits source metadata', async () => {
     const diagnostics: any[] = []
     const atomic = mock(async () => {})
-    const compat = buildRuntimeCompat({
-      client: { session: { updateMessageAtomic: atomic } },
+    const compat = await buildRuntimeCompat({
+      client: {},
+      resolveInternal: specifier => {
+        if (specifier === '@opencode-ai/opencode/session') {
+          return { Session: { updateMessageAtomic: atomic } }
+        }
+        throw new Error(`cannot load ${specifier}`)
+      },
       onCompatDiagnostic: event => diagnostics.push(event)
     })
 
     await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
 
     expect(atomic).toHaveBeenCalledTimes(1)
-    expect(atomic).toHaveBeenCalledWith({
-      sessionID: 's1',
-      messageID: 'msg1',
-      mutate: expect.any(Function),
-      toolContext: expect.anything()
+    expect(diagnostics).toContainEqual({
+      type: 'injector_source',
+      injector: 'module:Session.updateMessageAtomic(@opencode-ai/opencode/session)',
+      source: 'module',
+      specifier: '@opencode-ai/opencode/session',
+      exportPath: 'Session.updateMessageAtomic'
     })
     expect(diagnostics).toContainEqual({
-      type: 'injector_selected',
-      injector: INJECTOR_CANDIDATES[0].name
+      type: 'update_path',
+      path: 'injectedUpdater',
+      injector: 'module:Session.updateMessageAtomic(@opencode-ai/opencode/session)',
+      source: 'module'
     })
   })
 
-  it('falls through to second injector family when first is unavailable', async () => {
+  it('injects ctx.updateMessage at execute-time through registry patch', async () => {
     const diagnostics: any[] = []
-    const updateMessage = mock(async () => {})
-    const compat = buildRuntimeCompat({
-      client: { session: { updateMessage } },
-      onCompatDiagnostic: event => diagnostics.push(event)
-    })
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(updateMessage).toHaveBeenCalledTimes(1)
-    expect(diagnostics).toContainEqual({
-      type: 'injector_probe',
-      injector: INJECTOR_CANDIDATES[0].name,
-      available: false
-    })
-    expect(diagnostics).toContainEqual({
-      type: 'injector_selected',
-      injector: INJECTOR_CANDIDATES[1].name
-    })
-  })
-
-  it('selects third injector family when first two are unavailable', async () => {
-    const diagnostics: any[] = []
-    const patchUpdateMessage = mock(async () => {})
-    const createMutateBridge = mock((mutate: any) => mutate)
-    const compat = buildRuntimeCompat({
-      client: {
-        messageRoute: { patchUpdateMessage },
-        messageBridge: { createMutateBridge }
-      },
-      onCompatDiagnostic: event => diagnostics.push(event)
-    })
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(createMutateBridge).toHaveBeenCalledTimes(1)
-    expect(patchUpdateMessage).toHaveBeenCalledTimes(1)
-    expect(diagnostics).toContainEqual({
-      type: 'injector_selected',
-      injector: INJECTOR_CANDIDATES[2].name
-    })
-  })
-
-  it('continues probing when early injector probe throws', async () => {
-    const diagnostics: any[] = []
-    const updateMessage = mock(async () => {})
-    const internalsSession = {
-      get updateMessageAtomic() {
-        throw new Error('boom during probe')
-      },
-      updateMessage
+    const atomic = mock(async () => {})
+    const registryModule = {
+      fromPlugin(plugin: any) {
+        return {
+          execute(args: any, ctx: any) {
+            return plugin.execute(args, ctx)
+          }
+        }
+      }
     }
-    const compat = buildRuntimeCompat({
-      client: {
-        internals: { session: internalsSession },
-        session: { updateMessage }
+
+    const compat = await buildRuntimeCompat({
+      client: {},
+      resolveInternal: specifier => {
+        if (specifier === '@opencode-ai/opencode/session') {
+          return { Session: { updateMessageAtomic: atomic } }
+        }
+        if (specifier === '@opencode-ai/opencode/tool/registry') {
+          return registryModule
+        }
+        throw new Error('module missing')
+      },
+      onCompatDiagnostic: event => diagnostics.push(event)
+    })
+
+    const tool = registryModule.fromPlugin({
+      execute: async (_args: any, ctx: any) => {
+        await compat.updateMessage(ctx, 'msg1', () => {})
+      }
+    })
+
+    const ctx: any = { sessionID: 's1' }
+    await tool.execute({}, ctx)
+
+    expect(typeof ctx.updateMessage).toBe('function')
+    expect((ctx.updateMessage as any).__contextBonsaiInjected).toBe(true)
+    expect(atomic).toHaveBeenCalledTimes(1)
+    expect(diagnostics).toContainEqual({
+      type: 'update_path',
+      path: 'injectedUpdater',
+      injector: 'module:Session.updateMessageAtomic(@opencode-ai/opencode/session)',
+      source: 'module'
+    })
+  })
+
+  it('falls back to object-path probing when module probes miss', async () => {
+    const diagnostics: any[] = []
+    const updateMessage = mock(async () => {})
+    const compat = await buildRuntimeCompat({
+      client: { session: { updateMessage } },
+      resolveInternal: () => {
+        const error: any = new Error('module missing')
+        error.code = 'ERR_MODULE_NOT_FOUND'
+        throw error
       },
       onCompatDiagnostic: event => diagnostics.push(event)
     })
@@ -163,22 +189,54 @@ describe('runtime compatibility', () => {
 
     expect(updateMessage).toHaveBeenCalledTimes(1)
     expect(diagnostics).toContainEqual({
-      type: 'injector_probe_error',
-      injector: INJECTOR_CANDIDATES[0].name,
-      error: 'boom during probe'
-    })
-    expect(diagnostics).toContainEqual({
       type: 'injector_selected',
       injector: INJECTOR_CANDIDATES[1].name
     })
+    expect(diagnostics).toContainEqual({
+      type: 'injector_source',
+      injector: INJECTOR_CANDIDATES[1].name,
+      source: 'object-path'
+    })
+  })
+
+  it('continues probing after adapter_build_failed and still constructs compat', async () => {
+    const diagnostics: any[] = []
+    const updateMessage = mock(async () => {})
+    const compat = await buildRuntimeCompat({
+      client: { session: { updateMessage } },
+      resolveInternal: specifier => {
+        if (specifier === '@opencode-ai/opencode/message-route') {
+          return { MessageRoute: { patchUpdateMessage: async () => {} } }
+        }
+        const error: any = new Error('module missing')
+        error.code = 'ERR_MODULE_NOT_FOUND'
+        throw error
+      },
+      onCompatDiagnostic: event => diagnostics.push(event)
+    })
+
+    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
+
+    expect(updateMessage).toHaveBeenCalledTimes(1)
+    const buildFailedEvents = diagnostics.filter(event =>
+      event.type === 'injector_probe_error' && String(event.error).includes('adapter_build_failed')
+    )
+    expect(buildFailedEvents.length).toBeGreaterThan(0)
   })
 
   it('returns exact compatibility update error when no injector is available', async () => {
     const diagnostics: any[] = []
-    const compat = buildRuntimeCompat({ client: {}, onCompatDiagnostic: event => diagnostics.push(event) })
+    const compat = await buildRuntimeCompat({
+      client: {},
+      resolveInternal: () => {
+        const error: any = new Error('module missing')
+        error.code = 'ERR_MODULE_NOT_FOUND'
+        throw error
+      },
+      onCompatDiagnostic: event => diagnostics.push(event)
+    })
 
     await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
-
     expect(diagnostics).toContainEqual({ type: 'injector_none_selected' })
   })
 
@@ -187,7 +245,15 @@ describe('runtime compatibility', () => {
     const updateMessage = mock(async () => {})
     const updateMessageAtomic = mock(async () => {})
     const client: any = { session: { updateMessage } }
-    const compat = buildRuntimeCompat({ client, onCompatDiagnostic: event => diagnostics.push(event) })
+    const compat = await buildRuntimeCompat({
+      client,
+      resolveInternal: () => {
+        const error: any = new Error('module missing')
+        error.code = 'ERR_MODULE_NOT_FOUND'
+        throw error
+      },
+      onCompatDiagnostic: event => diagnostics.push(event)
+    })
 
     client.session.updateMessageAtomic = updateMessageAtomic
 
@@ -197,12 +263,19 @@ describe('runtime compatibility', () => {
     expect(updateMessage).toHaveBeenCalledTimes(2)
     expect(updateMessageAtomic).not.toHaveBeenCalled()
     expect(diagnostics.filter(event => event.type === 'injector_selected')).toHaveLength(1)
-    expect(diagnostics.filter(event => event.type === 'injector_probe')).toHaveLength(2)
   })
 
   it('rejects missing or empty sessionID in injected path', async () => {
     const atomic = mock(async () => {})
-    const compat = buildRuntimeCompat({ client: { session: { updateMessageAtomic: atomic } } })
+    const compat = await buildRuntimeCompat({
+      client: {},
+      resolveInternal: specifier => {
+        if (specifier === '@opencode-ai/opencode/session') {
+          return { Session: { updateMessageAtomic: atomic } }
+        }
+        throw new Error('module missing')
+      }
+    })
 
     await expect(compat.updateMessage({} as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
     await expect(compat.updateMessage({ sessionID: '   ' } as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
@@ -216,8 +289,14 @@ describe('runtime compatibility', () => {
       throw atomicError
     })
     const updateMessage = mock(async () => {})
-    const compat = buildRuntimeCompat({
-      client: { session: { updateMessageAtomic, updateMessage } },
+    const compat = await buildRuntimeCompat({
+      client: { session: { updateMessage } },
+      resolveInternal: specifier => {
+        if (specifier === '@opencode-ai/opencode/session') {
+          return { Session: { updateMessageAtomic } }
+        }
+        throw new Error('module missing')
+      },
       onCompatDiagnostic: event => diagnostics.push(event)
     })
 
@@ -226,8 +305,8 @@ describe('runtime compatibility', () => {
     expect(updateMessage).not.toHaveBeenCalled()
     expect(diagnostics).toContainEqual({
       type: 'injector_invoke_error',
-      injector: INJECTOR_CANDIDATES[0].name,
-      error: 'atomic failed'
+      injector: 'module:Session.updateMessageAtomic(@opencode-ai/opencode/session)',
+      error: 'adapter_invoke_failed: atomic failed'
     })
   })
 })

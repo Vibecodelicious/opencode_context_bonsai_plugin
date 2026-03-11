@@ -7,7 +7,8 @@
   "files": ["dist"],
   "scripts": {
     "build": "bun build ./src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --declaration --declarationDir dist",
-    "test": "bun test"
+    "test": "bun test",
+    "report:sessions": "bun scripts/list-bonsai-sessions.ts"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "*"

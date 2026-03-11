@@ -58,10 +58,14 @@ Or place in `.opencode/plugin/` directory.
 `opencode-context-bonsai` supports multiple OpenCode runtime capability tiers:
 
 - **Message reads**: uses `ctx.messages` when available; otherwise falls back to `ctx.client.session.messages({ path: { id: ctx.sessionID } })`.
-- **Message writes**: uses `ctx.updateMessage` when available; otherwise resolves one monkeypatch injector at plugin initialization from this ordered injector family list:
-  1. `session.updateMessageAtomic` bridge injector (tries `internals.session.updateMessageAtomic`, then `session.updateMessageAtomic`)
-  2. `session.updateMessage` mutate bridge injector (tries `internals.session.updateMessage`, then `session.updateMessage`)
-  3. message-route patch injector (tries `internals.messageRoute.patchUpdateMessage`, then `messageRoute.patchUpdateMessage`, and requires `messageBridge.createMutateBridge`)
+- **Message writes**: tiered compatibility path with deterministic selection:
+  1. native `ctx.updateMessage` (unchanged, always preferred when present)
+  2. execute-time tool-context injection via OpenCode internal registry patch (`fromPlugin`) that injects `ctx.updateMessage` when missing
+  3. runtime-compat injected updater fallback (same selected internal injector)
+  4. exact unsupported-runtime error when no safe write surface exists
+- **Internal injector probe order**:
+  1. module candidates: `Session.updateMessageAtomic`, then `Session.updateMessage`, then `MessageRoute.patchUpdateMessage + MessageBridge.createMutateBridge` across `@opencode-ai/opencode/*` then `opencode/*` specifiers (including `/index` session variants)
+  2. object-path candidates (legacy fallback): `internals.*` then direct `session.*` / `messageRoute.*`
 - **Deterministic behavior**: first available injector is selected once and cached for the plugin instance lifetime. There is no call-time re-probe and no fallback to later injectors if the selected injector throws.
 - **Unsupported runtime behavior**: tools return explicit compatibility errors instead of silently no-oping when required read/write capabilities are unavailable.
 
@@ -70,7 +74,7 @@ Troubleshooting notes:
 - If no injector is available at initialization, prune/retrieve writes return the exact compatibility update error.
 - Injected updater calls reject missing or empty `ctx.sessionID` with the same exact compatibility update error.
 - Selected injector invocation failures are treated as native runtime failures and are propagated unchanged (not rewritten as compatibility errors).
-- For debug instrumentation in custom integration tests, `buildRuntimeCompat` accepts `onCompatDiagnostic(event)` with `injector_*` events for probe, selection, and invoke failure signals.
+- For debug instrumentation in custom integration tests, `buildRuntimeCompat` accepts `onCompatDiagnostic(event)` with probe/selection/source/invoke diagnostics (`injector_*`, `injector_source`, `update_path`).
 
 Compatibility errors are returned as exact tool output strings:
 
