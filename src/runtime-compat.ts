@@ -528,7 +528,6 @@ async function selectModuleInjector(input: BuildRuntimeCompatInput): Promise<Sel
 
 function selectObjectPathInjector(input: BuildRuntimeCompatInput): SelectedInjector | undefined {
   const onCompatDiagnostic = input.onCompatDiagnostic
-  let selectedInjector: ObjectPathInjector | undefined
 
   for (const injector of updateInjectors) {
     const candidate = INJECTOR_CANDIDATES.find(item => item.name === injector.name)
@@ -574,21 +573,38 @@ function selectObjectPathInjector(input: BuildRuntimeCompatInput): SelectedInjec
 
     onCompatDiagnostic?.({ type: 'injector_probe', injector: injector.name, available })
 
-      if (available) {
-        selectedInjector = injector
-        onCompatDiagnostic?.({ type: 'injector_selected', injector: injector.name })
-        onCompatDiagnostic?.({ type: 'injector_source', injector: injector.name, source: 'object-path' })
-        break
-      }
+    if (!available) {
+      continue
+    }
+
+    let updater: RawInjectedUpdater
+    try {
+      updater = injector.inject(input.client)
+    } catch (error) {
+      onCompatDiagnostic?.({
+        type: 'injector_probe_error',
+        injector: injector.name,
+        error: normalizeProbeError('adapter_build_failed', error)
+      })
+      continue
+    }
+
+    onCompatDiagnostic?.({ type: 'injector_selected', injector: injector.name })
+    onCompatDiagnostic?.({ type: 'injector_source', injector: injector.name, source: 'object-path' })
+    return {
+      name: injector.name,
+      source: 'object-path',
+      updater
+    }
   }
 
-  if (!selectedInjector) return undefined
+  return undefined
+}
 
-  return {
-    name: selectedInjector.name,
-    source: 'object-path',
-    updater: selectedInjector.inject(input.client)
-  }
+export function __resetRegistryPatchStateForTests(): void {
+  registryPatchState.patched = false
+  registryPatchState.original = undefined
+  registryPatchState.target = undefined
 }
 
 async function patchRegistryFromPlugin(input: BuildRuntimeCompatInput, selectedInjector: SelectedInjector | undefined, injectedUpdater: InjectedUpdater | undefined): Promise<void> {
