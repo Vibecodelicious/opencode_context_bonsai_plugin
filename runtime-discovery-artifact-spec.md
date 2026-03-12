@@ -17,9 +17,23 @@ Provide machine-verifiable evidence for internal module targets used by compatib
 
 ```json
 {
-  "schemaVersion": "1",
+  "schemaVersion": "2",
   "generatedAt": "ISO-8601",
   "reproducibilityHash": "sha256-hex (generatedAt excluded)",
+  "inspectionCommands": ["ordered command list used for bundle inspection"],
+  "inspectionEnvironment": {
+    "cwd": "absolute-path",
+    "runtimeName": "stock|local",
+    "runtimeBinary": "absolute-path"
+  },
+  "inspectionEvidence": [
+    {
+      "source": "command|file|runtime",
+      "ref": "command string or file path",
+      "snippet": "normalized snippet (<=240 chars, whitespace collapsed)",
+      "order": 1
+    }
+  ],
   "runtime": {
     "name": "stock|local",
     "binary": "absolute-path",
@@ -43,6 +57,25 @@ Provide machine-verifiable evidence for internal module targets used by compatib
       }
     }
   ],
+  "candidateFindings": [
+    {
+      "kind": "registry|updater",
+      "sourceType": "bundle-symbol|runtime-object-path|import-resolvable",
+      "compatSource": "object-path|module",
+      "logicalTargetKey": "registry:fromPlugin",
+      "identifier": "string",
+      "evidence": "string",
+      "confidence": 0.0,
+      "validationState": "validated|rejected|inconclusive",
+      "validationReason": "string"
+    }
+  ],
+  "decisionGate": {
+    "status": "READY_FOR_INJECTION_IMPL|DISCOVERY_INCOMPLETE",
+    "blockerCodes": [
+      "missing_registry_target|missing_updater_target|registry_confidence_below_threshold|updater_confidence_below_threshold|registry_rejected|updater_rejected"
+    ]
+  },
   "negativeControls": [
     {
       "specifier": "known/bad/specifier",
@@ -63,9 +96,11 @@ Provide machine-verifiable evidence for internal module targets used by compatib
 
 - Artifact is invalid if `schemaVersion` or `probeMatrixVersion` missing.
 - Artifact is invalid if `reproducibilityHash` is missing.
+- Artifact is invalid if `inspectionCommands`, `inspectionEnvironment`, or `inspectionEvidence` is missing.
 - Artifact is invalid if any plan target lacks a matching `entries.id` row.
 - Artifact is invalid if no `negativeControls` are present.
-- For story completion, stock artifact must contain at least one callable registry patch target and one callable updater target.
+- For story completion, stock artifact must include required-class terminal outcomes (`validated` or `rejected`) and a decision gate.
+- `READY_FOR_INJECTION_IMPL` requires one validated `registry` and one validated `updater` candidate with confidence `>= 0.8`.
 
 ## Review/Judge Checklist
 

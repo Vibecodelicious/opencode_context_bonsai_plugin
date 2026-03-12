@@ -9,6 +9,42 @@ type ProbeKind = 'registry' | 'updater'
 type ExpectedContract = 'fromPlugin' | 'updateMessageAtomic' | 'updateMessage' | 'patchUpdateMessage'
 type ProbeStatus = 'resolved' | 'missing' | 'not_callable' | 'callable' | 'invoke_failed'
 type ProbeErrorClass = 'module_not_found' | 'export_path_missing' | 'not_callable' | 'invoke_failed' | null
+type CandidateSourceType = 'bundle-symbol' | 'runtime-object-path' | 'import-resolvable'
+type ValidationState = 'validated' | 'rejected' | 'inconclusive'
+type DecisionGateStatus = 'READY_FOR_INJECTION_IMPL' | 'DISCOVERY_INCOMPLETE'
+type BlockerCode =
+  | 'missing_registry_target'
+  | 'missing_updater_target'
+  | 'registry_confidence_below_threshold'
+  | 'updater_confidence_below_threshold'
+  | 'registry_rejected'
+  | 'updater_rejected'
+
+type RequiredClass = 'registry' | 'updater'
+
+type InspectionEvidenceRecord = {
+  source: 'command' | 'file' | 'runtime'
+  ref: string
+  snippet: string
+  order: number
+}
+
+type CandidateFinding = {
+  kind: RequiredClass
+  sourceType: CandidateSourceType
+  compatSource: 'object-path' | 'module'
+  logicalTargetKey: string
+  identifier: string
+  evidence: string
+  confidence: number
+  validationState: ValidationState
+  validationReason: string
+}
+
+type DecisionGate = {
+  status: DecisionGateStatus
+  blockerCodes: BlockerCode[]
+}
 
 type ProbeEntrySpec = {
   id: string
@@ -35,9 +71,16 @@ type ProbeEntryArtifact = ProbeEntrySpec & {
 }
 
 type DiscoveryArtifact = {
-  schemaVersion: '1'
+  schemaVersion: '2'
   generatedAt: string
   reproducibilityHash: string
+  inspectionCommands: string[]
+  inspectionEnvironment: {
+    cwd: string
+    runtimeName: RuntimeName
+    runtimeBinary: string
+  }
+  inspectionEvidence: InspectionEvidenceRecord[]
   runtime: {
     name: RuntimeName
     binary: string
@@ -45,6 +88,8 @@ type DiscoveryArtifact = {
   }
   probeMatrixVersion: 'v1'
   entries: ProbeEntryArtifact[]
+  candidateFindings: CandidateFinding[]
+  decisionGate: DecisionGate
   negativeControls: Array<{
     specifier: string
     exportPath: string
@@ -66,6 +111,23 @@ type DiscoveryArtifact = {
 type RuntimeProbeContext = {
   contextDir: string
   localModuleRoots: string[]
+}
+
+type RuntimeDumpHit = {
+  path: string
+  kind: string
+}
+
+type RuntimeDumpSnapshot = {
+  capturedAt: string
+  visitedNodes: number
+  truncated: boolean
+  hits: RuntimeDumpHit[]
+}
+
+type RuntimeDumpDocument = {
+  schemaVersion: '1'
+  roots: Partial<Record<'pluginInitInput' | 'pluginInitClient' | 'toolExecuteContext', RuntimeDumpSnapshot>>
 }
 
 type WorkerProbeResult = {
@@ -100,6 +162,350 @@ const PROBE_MATRIX: ProbeEntrySpec[] = [
   { id: 'UPD-009', kind: 'updater', specifier: '@opencode-ai/opencode/message-route', exportPath: 'MessageRoute.patchUpdateMessage', expectedContract: 'patchUpdateMessage' },
   { id: 'UPD-010', kind: 'updater', specifier: 'opencode/message-route', exportPath: 'MessageRoute.patchUpdateMessage', expectedContract: 'patchUpdateMessage' }
 ]
+
+const REQUIRED_CLASS_THRESHOLD = 0.8
+
+const SOURCE_PRECEDENCE: CandidateSourceType[] = ['runtime-object-path', 'import-resolvable', 'bundle-symbol']
+
+const EXACT_TOKEN_REGEX: Record<ExpectedContract, RegExp> = {
+  fromPlugin: /\bfromPlugin\b/,
+  updateMessageAtomic: /\bupdateMessageAtomic\b/,
+  updateMessage: /\bupdateMessage\b/,
+  patchUpdateMessage: /\bpatchUpdateMessage\b/
+}
+
+const SUPPORTING_TOKEN_REGEX = /\b(ToolRegistry|Session|MessageRoute)\b/
+
+export function normalizeSnippet(input: string): string {
+  return input.replace(/\s+/g, ' ').trim().slice(0, 240)
+}
+
+function makeEvidenceRecord(
+  source: InspectionEvidenceRecord['source'],
+  ref: string,
+  snippet: string,
+  order: number
+): InspectionEvidenceRecord {
+  return {
+    source,
+    ref,
+    snippet: normalizeSnippet(snippet),
+    order
+  }
+}
+
+async function runInspectionCommand(command: string, cwd: string): Promise<{ command: string; output: string }> {
+  const proc = Bun.spawn(['sh', '-lc', command], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe'
+  })
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  const output = `${stdout}\n${stderr}`.trim()
+  return { command, output }
+}
+
+function mapExportPathToLogicalTarget(pathName: string): string | null {
+  if (pathName.endsWith('fromPlugin')) return 'registry:fromPlugin'
+  if (pathName.endsWith('updateMessageAtomic')) return 'updater:updateMessageAtomic'
+  if (pathName.endsWith('patchUpdateMessage')) return 'updater:patchUpdateMessage'
+  if (pathName.endsWith('updateMessage')) return 'updater:updateMessage'
+  return null
+}
+
+function sourceCompatSource(source: CandidateSourceType): 'object-path' | 'module' {
+  return source === 'import-resolvable' ? 'module' : 'object-path'
+}
+
+function baseConfidence(sourceType: CandidateSourceType): number {
+  if (sourceType === 'runtime-object-path') return 0.9
+  if (sourceType === 'import-resolvable') return 0.8
+  return 0.5
+}
+
+function clampConfidence(value: number): number {
+  return Math.max(0, Math.min(1, Number(value.toFixed(2))))
+}
+
+function compareSourcePrecedence(a: CandidateSourceType, b: CandidateSourceType): number {
+  return SOURCE_PRECEDENCE.indexOf(a) - SOURCE_PRECEDENCE.indexOf(b)
+}
+
+type RawCandidate = {
+  kind: RequiredClass
+  sourceType: CandidateSourceType
+  logicalTargetKey: string
+  identifier: string
+  evidence: string
+  exactTokenMatch: boolean
+  partialPathMatch: boolean
+  adapterSimulationPassed: boolean
+  validationState: ValidationState
+  validationReason: string
+}
+
+function scoreCandidate(candidate: RawCandidate, corroborated: boolean): number {
+  let score = baseConfidence(candidate.sourceType)
+  if (candidate.adapterSimulationPassed) {
+    score += 0.05
+  }
+  if (!candidate.exactTokenMatch) {
+    score -= 0.2
+  }
+  if (candidate.partialPathMatch) {
+    score -= 0.1
+  }
+  if (corroborated) {
+    score += 0.05
+  }
+  return clampConfidence(score)
+}
+
+export function dedupeAndRankCandidates(raw: RawCandidate[]): CandidateFinding[] {
+  const grouped = new Map<string, RawCandidate[]>()
+  for (const candidate of raw) {
+    const list = grouped.get(candidate.logicalTargetKey) ?? []
+    list.push(candidate)
+    grouped.set(candidate.logicalTargetKey, list)
+  }
+
+  const findings: CandidateFinding[] = []
+  for (const [logicalTargetKey, candidates] of grouped.entries()) {
+    const sorted = [...candidates].sort((left, right) => {
+      const precedence = compareSourcePrecedence(left.sourceType, right.sourceType)
+      if (precedence !== 0) return precedence
+      return right.identifier.localeCompare(left.identifier)
+    })
+    const strongest = sorted[0]
+    const corroborated = sorted.some(candidate => compareSourcePrecedence(candidate.sourceType, strongest.sourceType) > 0)
+    findings.push({
+      kind: strongest.kind,
+      sourceType: strongest.sourceType,
+      compatSource: sourceCompatSource(strongest.sourceType),
+      logicalTargetKey,
+      identifier: strongest.identifier,
+      evidence: strongest.evidence,
+      confidence: scoreCandidate(strongest, corroborated),
+      validationState: strongest.validationState,
+      validationReason: strongest.validationReason
+    })
+  }
+
+  findings.sort((left, right) => {
+    if (left.kind !== right.kind) return left.kind.localeCompare(right.kind)
+    const precedence = compareSourcePrecedence(left.sourceType, right.sourceType)
+    if (precedence !== 0) return precedence
+    return right.confidence - left.confidence
+  })
+
+  return findings
+}
+
+export function buildImportResolvableCandidates(entries: ProbeEntryArtifact[]): RawCandidate[] {
+  const candidates: RawCandidate[] = []
+  for (const entry of entries) {
+    const logicalTargetKey = mapExportPathToLogicalTarget(entry.exportPath)
+    if (!logicalTargetKey) continue
+
+    const isCallable = entry.result.status === 'callable'
+    const isTerminalRejected =
+      entry.result.status === 'missing' || entry.result.status === 'not_callable' || entry.result.status === 'invoke_failed'
+    if (!isCallable && !isTerminalRejected) {
+      continue
+    }
+
+    const exactMatch = EXACT_TOKEN_REGEX[entry.expectedContract].test(entry.exportPath)
+    candidates.push({
+      kind: entry.kind,
+      sourceType: 'import-resolvable',
+      logicalTargetKey,
+      identifier: `${entry.specifier}:${entry.exportPath}`,
+      evidence: entry.result.evidence ?? `${entry.result.status}:${entry.result.errorClass ?? 'none'}`,
+      exactTokenMatch: exactMatch,
+      partialPathMatch: false,
+      adapterSimulationPassed: isCallable,
+      validationState: isCallable ? 'validated' : 'rejected',
+      validationReason: isCallable ? 'callable_shape_match' : entry.result.errorClass ?? 'probe_failed'
+    })
+  }
+  return candidates
+}
+
+export function extractBundleTextCandidates(lines: string[]): RawCandidate[] {
+  const joined = lines.join('\n')
+  const hasSupportTokens = SUPPORTING_TOKEN_REGEX.test(joined)
+  const candidates: RawCandidate[] = []
+
+  const bundleMatches: Array<{ key: string; token: ExpectedContract; kind: RequiredClass }> = [
+    { key: 'registry:fromPlugin', token: 'fromPlugin', kind: 'registry' },
+    { key: 'updater:updateMessageAtomic', token: 'updateMessageAtomic', kind: 'updater' },
+    { key: 'updater:updateMessage', token: 'updateMessage', kind: 'updater' },
+    { key: 'updater:patchUpdateMessage', token: 'patchUpdateMessage', kind: 'updater' }
+  ]
+
+  for (const match of bundleMatches) {
+    const exact = EXACT_TOKEN_REGEX[match.token].test(joined)
+    if (!exact && !hasSupportTokens) {
+      continue
+    }
+
+    candidates.push({
+      kind: match.kind,
+      sourceType: 'bundle-symbol',
+      logicalTargetKey: match.key,
+      identifier: `bundle-token:${match.token}`,
+      evidence: exact ? `exact token found: ${match.token}` : `supporting token found near expected symbol: ${match.token}`,
+      exactTokenMatch: exact,
+      partialPathMatch: !exact,
+      adapterSimulationPassed: false,
+      validationState: exact ? 'rejected' : 'inconclusive',
+      validationReason: exact ? 'textual_match_only_not_callable' : 'fuzzy_symbol_inference'
+    })
+  }
+
+  return candidates
+}
+
+function classifyRuntimePath(pathName: string): { key: string; kind: RequiredClass; exact: boolean; partial: boolean } | null {
+  const normalized = pathName.toLowerCase()
+  if (normalized.includes('fromplugin')) {
+    return {
+      key: 'registry:fromPlugin',
+      kind: 'registry',
+      exact: /(^|\.)fromPlugin$/.test(pathName),
+      partial: !/(^|\.)fromPlugin$/.test(pathName)
+    }
+  }
+  if (normalized.includes('updatemessageatomic')) {
+    return {
+      key: 'updater:updateMessageAtomic',
+      kind: 'updater',
+      exact: /(^|\.)updateMessageAtomic$/.test(pathName),
+      partial: !/(^|\.)updateMessageAtomic$/.test(pathName)
+    }
+  }
+  if (normalized.includes('patchupdatemessage')) {
+    return {
+      key: 'updater:patchUpdateMessage',
+      kind: 'updater',
+      exact: /(^|\.)patchUpdateMessage$/.test(pathName),
+      partial: !/(^|\.)patchUpdateMessage$/.test(pathName)
+    }
+  }
+  if (normalized.includes('updatemessage')) {
+    return {
+      key: 'updater:updateMessage',
+      kind: 'updater',
+      exact: /(^|\.)updateMessage$/.test(pathName),
+      partial: !/(^|\.)updateMessage$/.test(pathName)
+    }
+  }
+  return null
+}
+
+export function extractRuntimeObjectCandidates(runtimeDump: RuntimeDumpDocument | null): RawCandidate[] {
+  if (!runtimeDump) return []
+  const candidates: RawCandidate[] = []
+  const emittedPerClass: Record<RequiredClass, number> = { registry: 0, updater: 0 }
+  const roots = Object.entries(runtimeDump.roots)
+  for (const [rootName, root] of roots) {
+    if (!root) continue
+    for (const hit of root.hits) {
+      if (hit.kind !== 'function') continue
+      const classified = classifyRuntimePath(hit.path)
+      if (!classified) continue
+      if (emittedPerClass[classified.kind] >= 100) continue
+      candidates.push({
+        kind: classified.kind,
+        sourceType: 'runtime-object-path',
+        logicalTargetKey: classified.key,
+        identifier: `${rootName}:${hit.path}`,
+        evidence: `callable hit from ${rootName}: ${hit.path}`,
+        exactTokenMatch: classified.exact,
+        partialPathMatch: classified.partial,
+        adapterSimulationPassed: classified.kind === 'updater' || classified.key === 'registry:fromPlugin',
+        validationState: classified.exact ? 'validated' : 'rejected',
+        validationReason: classified.exact ? 'callable_shape_match' : 'partial_path_match'
+      })
+      emittedPerClass[classified.kind] += 1
+    }
+  }
+  return candidates
+}
+
+export function addSyntheticRequiredClassRejects(findings: CandidateFinding[]): CandidateFinding[] {
+  const withSynthetic = findings.map(finding => {
+    if (finding.validationState !== 'inconclusive') {
+      return finding
+    }
+    return {
+      ...finding,
+      validationState: 'rejected' as const,
+      validationReason: 'insufficient_evidence_for_required_class'
+    }
+  })
+  for (const kind of ['registry', 'updater'] as const) {
+    const exists = withSynthetic.some(candidate => candidate.kind === kind)
+    if (exists) continue
+    withSynthetic.push({
+      kind,
+      sourceType: 'bundle-symbol',
+      compatSource: 'object-path',
+      logicalTargetKey: `${kind}:none-found`,
+      identifier: `${kind}:none-found`,
+      evidence: 'synthetic rejection because no candidates were discovered',
+      confidence: 0,
+      validationState: 'rejected',
+      validationReason: 'no_candidates_discovered'
+    })
+  }
+  return withSynthetic
+}
+
+export function buildDecisionGate(findings: CandidateFinding[]): DecisionGate {
+  const blockers = new Set<BlockerCode>()
+
+  for (const kind of ['registry', 'updater'] as const) {
+    const classFindings = findings.filter(finding => finding.kind === kind)
+    if (classFindings.length === 0) {
+      blockers.add(kind === 'registry' ? 'missing_registry_target' : 'missing_updater_target')
+      continue
+    }
+
+    const validated = classFindings.filter(finding => finding.validationState === 'validated')
+    const rejected = classFindings.filter(finding => finding.validationState === 'rejected')
+
+    if (validated.length === 0 && rejected.length > 0) {
+      blockers.add(kind === 'registry' ? 'registry_rejected' : 'updater_rejected')
+      continue
+    }
+
+    if (validated.length > 0) {
+      const bestConfidence = Math.max(...validated.map(candidate => candidate.confidence))
+      if (bestConfidence < REQUIRED_CLASS_THRESHOLD) {
+        blockers.add(kind === 'registry' ? 'registry_confidence_below_threshold' : 'updater_confidence_below_threshold')
+      }
+    }
+  }
+
+  const blockerCodes = [...blockers].sort((left, right) => left.localeCompare(right))
+  return {
+    status: blockerCodes.length === 0 ? 'READY_FOR_INJECTION_IMPL' : 'DISCOVERY_INCOMPLETE',
+    blockerCodes
+  }
+}
+
+export function parseRuntimeDump(raw: string): RuntimeDumpDocument | null {
+  try {
+    const parsed = JSON.parse(raw) as RuntimeDumpDocument
+    if (!parsed || parsed.schemaVersion !== '1' || typeof parsed.roots !== 'object') {
+      return null
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
 
 const WORKER_SCRIPT = String.raw`
 import path from 'node:path'
@@ -566,6 +972,71 @@ async function readRuntimeVersion(binaryPath: string): Promise<string> {
   return stdout.trim() || stderr.trim() || 'unknown'
 }
 
+async function collectInspectionData(runtime: RuntimeName, binary: string): Promise<{
+  inspectionCommands: string[]
+  inspectionEvidence: InspectionEvidenceRecord[]
+  runtimeDump: RuntimeDumpDocument | null
+}> {
+  const inspectionCommands = [
+    `file ${binary}`,
+    `strings -n 8 ${binary} | rg "fromPlugin|updateMessageAtomic|updateMessage|patchUpdateMessage|ToolRegistry|Session|MessageRoute"`
+  ]
+  const inspectionEvidence: InspectionEvidenceRecord[] = []
+  let order = 1
+
+  const fileInfo = await runInspectionCommand(inspectionCommands[0], process.cwd())
+  inspectionEvidence.push(makeEvidenceRecord('command', fileInfo.command, fileInfo.output || 'no output', order))
+  order += 1
+
+  const symbolInfo = await runInspectionCommand(inspectionCommands[1], process.cwd())
+  inspectionEvidence.push(makeEvidenceRecord('command', symbolInfo.command, symbolInfo.output || 'no output', order))
+  order += 1
+
+  const runtimeDumpPath = process.env.CONTEXT_BONSAI_DISCOVERY_OUT
+  let runtimeDump: RuntimeDumpDocument | null = null
+  if (runtimeDumpPath && runtimeDumpPath.trim() !== '') {
+    const absoluteRuntimeDumpPath = path.resolve(runtimeDumpPath)
+    const dumpFile = Bun.file(absoluteRuntimeDumpPath)
+    if (await dumpFile.exists()) {
+      const runtimeRaw = await dumpFile.text()
+      runtimeDump = parseRuntimeDump(runtimeRaw)
+    }
+    if (runtimeDump) {
+      inspectionEvidence.push(
+        makeEvidenceRecord(
+          'runtime',
+          absoluteRuntimeDumpPath,
+          `runtime dump loaded for ${runtime}; roots=${Object.keys(runtimeDump.roots).join(',')}`,
+          order
+        )
+      )
+    } else {
+      inspectionEvidence.push(
+        makeEvidenceRecord('runtime', absoluteRuntimeDumpPath, `runtime dump unavailable or parse failed for ${runtime}`, order)
+      )
+    }
+    order += 1
+  }
+
+  return {
+    inspectionCommands,
+    inspectionEvidence,
+    runtimeDump
+  }
+}
+
+function buildCandidateFindings(entries: ProbeEntryArtifact[], inspectionEvidence: InspectionEvidenceRecord[], runtimeDump: RuntimeDumpDocument | null): CandidateFinding[] {
+  const bundleEvidenceLines = inspectionEvidence
+    .filter(record => record.source === 'command' && record.ref.includes('strings -n 8'))
+    .map(record => record.snippet)
+  const rawCandidates = [
+    ...buildImportResolvableCandidates(entries),
+    ...extractBundleTextCandidates(bundleEvidenceLines),
+    ...extractRuntimeObjectCandidates(runtimeDump)
+  ]
+  return addSyntheticRequiredClassRejects(dedupeAndRankCandidates(rawCandidates))
+}
+
 export async function discoverRuntimeTargets(runtime: RuntimeName): Promise<DiscoveryArtifact> {
   const context = await discoverRuntimeProbeContext(runtime)
   const binary = RUNTIME_BINARIES[runtime]
@@ -576,6 +1047,9 @@ export async function discoverRuntimeTargets(runtime: RuntimeName): Promise<Disc
   const entries = workerResults.entries
   const negativeControls = workerResults.negativeControls
   const summary = summarizeEntries(entries)
+  const inspection = await collectInspectionData(runtime, binary)
+  const candidateFindings = buildCandidateFindings(entries, inspection.inspectionEvidence, inspection.runtimeDump)
+  const decisionGate = buildDecisionGate(candidateFindings)
   const diagnostics: DiscoveryArtifact['diagnostics'] = []
 
   if (context.localModuleRoots.length === 0) {
@@ -592,39 +1066,55 @@ export async function discoverRuntimeTargets(runtime: RuntimeName): Promise<Disc
     })
   }
 
-  const callableRegistry = entries.filter(entry => entry.kind === 'registry' && entry.result.status === 'callable').length
-  const callableUpdater = entries.filter(entry => entry.kind === 'updater' && entry.result.status === 'callable').length
-  if (callableRegistry === 0 || callableUpdater === 0) {
+  if (decisionGate.status === 'DISCOVERY_INCOMPLETE') {
     diagnostics.push({
       level: 'warn',
-      code: 'callable_gate_unmet',
-      message: `Callable gate unmet (registry=${callableRegistry}, updater=${callableUpdater}); inspect entries[*].result.{errorClass,evidence,attemptedPaths}.`
+      code: 'decision_gate_unmet',
+      message: `Discovery gate unmet; blocker codes: ${decisionGate.blockerCodes.join(', ') || 'none'}.`
     })
   } else {
     diagnostics.push({
       level: 'info',
-      code: 'callable_gate_met',
-      message: `Callable gate met (registry=${callableRegistry}, updater=${callableUpdater}).`
+      code: 'decision_gate_met',
+      message: 'Discovery gate met; runtime is ready for injection implementation.'
     })
   }
 
   const reproducibilityHash = computeReproducibilityHash({
-    schemaVersion: '1',
+    schemaVersion: '2',
+    inspectionCommands: inspection.inspectionCommands,
+    inspectionEnvironment: {
+      cwd: context.contextDir,
+      runtimeName: runtime,
+      runtimeBinary: binary
+    },
+    inspectionEvidence: inspection.inspectionEvidence,
     runtime: { name: runtime, binary, reportedVersion },
     probeMatrixVersion: 'v1',
     entries,
+    candidateFindings,
+    decisionGate,
     negativeControls,
     summary,
     diagnostics
   })
 
   return {
-    schemaVersion: '1',
+    schemaVersion: '2',
     generatedAt: new Date().toISOString(),
     reproducibilityHash,
+    inspectionCommands: inspection.inspectionCommands,
+    inspectionEnvironment: {
+      cwd: context.contextDir,
+      runtimeName: runtime,
+      runtimeBinary: binary
+    },
+    inspectionEvidence: inspection.inspectionEvidence,
     runtime: { name: runtime, binary, reportedVersion },
     probeMatrixVersion: 'v1',
     entries,
+    candidateFindings,
+    decisionGate,
     negativeControls,
     summary,
     diagnostics
@@ -642,6 +1132,7 @@ async function main(): Promise<void> {
   const { resolvedCount, callableCount, missingCount, invokeFailedCount } = artifact.summary
   console.log(`runtime=${artifact.runtime.name} version=${artifact.runtime.reportedVersion} out=${outPath}`)
   console.log(`summary resolved=${resolvedCount} callable=${callableCount} missing=${missingCount} invoke_failed=${invokeFailedCount}`)
+  console.log(`decisionGate status=${artifact.decisionGate.status} blockers=${artifact.decisionGate.blockerCodes.join(',') || 'none'}`)
   console.log(`reproducibilityHash=${artifact.reproducibilityHash}`)
 }
 
