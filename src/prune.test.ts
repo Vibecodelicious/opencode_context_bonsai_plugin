@@ -152,6 +152,56 @@ describe('prune tool', () => {
     expect(result).toBe('2 messages match "shared needle"; use a more precise pattern')
   })
 
+  test('pattern mode retry resolves corrected boundaries despite prior prune-call corpus matches', async () => {
+    const start = makeUserMessage('msg1', sessionID, 'retry start marker')
+    const middle = makeAssistantMessage('msg2', sessionID, 'middle content')
+    const end = makeUserMessage('msg3', sessionID, 'retry end marker')
+
+    const failedPruneCall = makeAssistantMessage('msg4', sessionID, 'failed prune wrapper')
+    failedPruneCall.parts = [{
+      id: 'msg4-tool',
+      sessionID,
+      messageID: 'msg4',
+      type: 'tool',
+      callID: 'call-prune-1',
+      tool: 'context-bonsai-prune',
+      state: {
+        status: 'completed',
+        input: {
+          from_pattern: 'retry start marker',
+          to_pattern: 'retry end marker'
+        },
+        output: {
+          error: '2 messages match "retry start marker"; use a more precise pattern'
+        }
+      }
+    } as any]
+
+    const messages = [start, middle, end, failedPruneCall]
+
+    let updatedID = ''
+    const mockCtx = {
+      sessionID,
+      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
+      languageModel: {},
+      updateMessage: async (id: string) => {
+        updatedID = id
+      }
+    }
+
+    const result = await pruneToolDefinition.execute({
+      from_pattern: 'retry start marker',
+      to_pattern: 'retry end marker',
+      summary: 'Retry succeeds after failed prune call',
+      index_terms: ['retry', 'stability', 'ambiguity']
+    }, mockCtx as any)
+
+    expect(updatedID).toBe('msg1')
+    expect(result).toContain('Archived 3 messages')
+    expect(result).toContain('pattern "retry start marker" (resolved to msg1)')
+    expect(result).toContain('pattern "retry end marker" (resolved to msg3)')
+  })
+
   test('pattern resolution errors run before validatePruneInput errors', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'first marker'),

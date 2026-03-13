@@ -124,4 +124,100 @@ describe('prune pattern utilities', () => {
     expect(resolvePatternBoundary([plain, toolMessage], '"retries":2')).toBe('msg2')
     expect(resolvePatternBoundary([plain, toolMessage], '"status":"ok"')).toBe('msg2')
   })
+
+  test('resolvePatternBoundary selects single non-prune candidate when ambiguity includes prune calls', () => {
+    const pruneCallA = makeAssistantMessage('msg1', 's1', 'wrapper text')
+    pruneCallA.parts = [{
+      id: 'msg1-tool',
+      sessionID: 's1',
+      messageID: 'msg1',
+      type: 'tool',
+      callID: 'call-1',
+      tool: 'context-bonsai-prune',
+      state: {
+        status: 'completed',
+        input: { from_pattern: 'shared boundary' },
+        output: { ok: false }
+      }
+    } as any]
+
+    const realBoundary = makeUserMessage('msg2', 's1', 'shared boundary')
+
+    const pruneCallB = makeAssistantMessage('msg3', 's1', 'wrapper text')
+    pruneCallB.parts = [{
+      id: 'msg3-tool',
+      sessionID: 's1',
+      messageID: 'msg3',
+      type: 'tool',
+      callID: 'call-2',
+      tool: 'context-bonsai-prune',
+      state: {
+        status: 'completed',
+        input: { to_pattern: 'shared boundary' },
+        output: { ok: false }
+      }
+    } as any]
+
+    expect(resolvePatternBoundary([pruneCallA, realBoundary, pruneCallB], 'shared boundary')).toBe('msg2')
+  })
+
+  test('resolvePatternBoundary preserves ambiguity error when multiple non-prune candidates match', () => {
+    const nonPruneA = makeUserMessage('msg1', 's1', 'shared boundary')
+    const nonPruneB = makeAssistantMessage('msg2', 's1', 'shared boundary')
+
+    const pruneCall = makeAssistantMessage('msg3', 's1', 'wrapper text')
+    pruneCall.parts = [{
+      id: 'msg3-tool',
+      sessionID: 's1',
+      messageID: 'msg3',
+      type: 'tool',
+      callID: 'call-3',
+      tool: 'context-bonsai-prune',
+      state: {
+        status: 'completed',
+        input: { from_pattern: 'shared boundary' },
+        output: { ok: false }
+      }
+    } as any]
+
+    expect(() => resolvePatternBoundary([nonPruneA, nonPruneB, pruneCall], 'shared boundary')).toThrow(
+      '3 messages match "shared boundary"; use a more precise pattern'
+    )
+  })
+
+  test('resolvePatternBoundary preserves ambiguity error when all matches are prune candidates', () => {
+    const pruneCallA = makeAssistantMessage('msg1', 's1', 'wrapper text')
+    pruneCallA.parts = [{
+      id: 'msg1-tool',
+      sessionID: 's1',
+      messageID: 'msg1',
+      type: 'tool',
+      callID: 'call-4',
+      tool: 'context-bonsai-prune',
+      state: {
+        status: 'completed',
+        input: { from_pattern: 'shared boundary' },
+        output: { ok: false }
+      }
+    } as any]
+
+    const pruneCallB = makeAssistantMessage('msg2', 's1', 'wrapper text')
+    pruneCallB.parts = [{
+      id: 'msg2-tool',
+      sessionID: 's1',
+      messageID: 'msg2',
+      type: 'tool',
+      callID: 'call-5',
+      tool: 'context-bonsai-prune',
+      state: {
+        status: 'completed',
+        input: { to_pattern: 'shared boundary' },
+        output: { ok: false }
+      }
+    } as any]
+
+    expect(() => resolvePatternBoundary([pruneCallA, pruneCallB], 'shared boundary')).toThrow(
+      '2 messages match "shared boundary"; use a more precise pattern'
+    )
+  })
 })

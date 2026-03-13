@@ -83,15 +83,23 @@ export function buildMessageSearchCorpus(message: WithParts): string {
 }
 
 export function resolvePatternBoundary(messages: WithParts[], pattern: string): string {
-  const matchingIds = messages
-    .filter(message => messageMatchesPattern(buildMessageSearchCorpus(message), pattern))
-    .map(message => message.id)
+  const matchingMessages = messages.filter(message => messageMatchesPattern(buildMessageSearchCorpus(message), pattern))
+
+  const matchingIds = matchingMessages.map(message => message.id)
+
+  const isPruneCandidate = (message: WithParts): boolean =>
+    message.parts.some(part => part.type === 'tool' && part.tool === 'context-bonsai-prune' && part.state?.status === 'completed')
 
   if (matchingIds.length === 0) {
     throw new Error(`No messages match "${pattern}"`)
   }
 
   if (matchingIds.length > 1) {
+    const nonPruneCandidates = matchingMessages.filter(message => !isPruneCandidate(message))
+    if (nonPruneCandidates.length === 1) {
+      return nonPruneCandidates[0].id
+    }
+
     throw new Error(`${matchingIds.length} messages match "${pattern}"; use a more precise pattern`)
   }
 
