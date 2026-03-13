@@ -22,8 +22,35 @@ interface UpdateAdapter {
   invoke(args: { client: any; ctx: any; id: string; mutate: MessageMutator }): Promise<void>
 }
 
-function hasUpdateMethod(client: any, method: 'updateMessageAtomic' | 'updateMessage'): boolean {
-  return !!client?.session && typeof client.session[method] === 'function'
+type UpdateSignature = 'positional' | 'object_ctx' | 'object_session' | 'unknown' | 'absent'
+
+function detectUpdateSignature(method: unknown): UpdateSignature {
+  if (typeof method !== 'function') {
+    return 'absent'
+  }
+
+  if (method.length >= 2) {
+    return 'positional'
+  }
+
+  let source = ''
+  try {
+    source = Function.prototype.toString.call(method)
+  } catch {
+    return 'unknown'
+  }
+
+  const hasSessionKeys = source.includes('sessionID') && source.includes('messageID')
+  if (hasSessionKeys) {
+    return 'object_session'
+  }
+
+  const hasCtxKeys = source.includes('ctx') && source.includes('id')
+  if (hasCtxKeys) {
+    return 'object_ctx'
+  }
+
+  return 'unknown'
 }
 
 export interface RuntimeCompat {
@@ -88,21 +115,24 @@ export function createRuntimeCompat(options?: { injectedUpdater?: InjectedUpdate
 const updateAdapters: UpdateAdapter[] = [
   {
     name: 'client.session.updateMessageAtomic(ctx, id, mutate)',
-    isAvailable: (client: any) => hasUpdateMethod(client, 'updateMessageAtomic'),
+    isAvailable: (client: any) => detectUpdateSignature(client?.session?.updateMessageAtomic) === 'positional',
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessageAtomic(ctx, id, mutate)
     }
   },
   {
     name: 'client.session.updateMessageAtomic({ ctx, id, mutate })',
-    isAvailable: (client: any) => hasUpdateMethod(client, 'updateMessageAtomic'),
+    isAvailable: (client: any) => {
+      const signature = detectUpdateSignature(client?.session?.updateMessageAtomic)
+      return signature === 'object_ctx' || signature === 'unknown'
+    },
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessageAtomic({ ctx, id, mutate })
     }
   },
   {
     name: 'client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })',
-    isAvailable: (client: any) => hasUpdateMethod(client, 'updateMessageAtomic'),
+    isAvailable: (client: any) => detectUpdateSignature(client?.session?.updateMessageAtomic) === 'object_session',
     requiresSessionID: true,
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })
@@ -110,14 +140,17 @@ const updateAdapters: UpdateAdapter[] = [
   },
   {
     name: 'client.session.updateMessage({ ctx, id, mutate })',
-    isAvailable: (client: any) => hasUpdateMethod(client, 'updateMessage'),
+    isAvailable: (client: any) => {
+      const signature = detectUpdateSignature(client?.session?.updateMessage)
+      return signature === 'object_ctx' || signature === 'unknown'
+    },
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessage({ ctx, id, mutate })
     }
   },
   {
     name: 'client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })',
-    isAvailable: (client: any) => hasUpdateMethod(client, 'updateMessage'),
+    isAvailable: (client: any) => detectUpdateSignature(client?.session?.updateMessage) === 'object_session',
     requiresSessionID: true,
     invoke: async ({ client, ctx, id, mutate }) => {
       await client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })

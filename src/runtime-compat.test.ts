@@ -155,18 +155,41 @@ describe('runtime compatibility', () => {
     expect(updateMessage).not.toHaveBeenCalled()
   })
 
-  it('selects first structural atomic adapter without signature probing', async () => {
+  it('supports object ctx/id/mutate signature variant', async () => {
+    let callArg: any
+    const updateMessageAtomic = async ({ ctx, id, mutate }: { ctx: any; id: string; mutate: (draft: any) => void }) => {
+      callArg = { ctx, id, mutate }
+    }
+    const compat = buildRuntimeCompat({
+      client: {
+        session: {
+          updateMessageAtomic
+        }
+      }
+    })
+
+    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
+
+    expect(callArg).toEqual({
+      ctx: expect.objectContaining({ sessionID: 's1' }),
+      id: 'msg1',
+      mutate: expect.any(Function)
+    })
+  })
+
+  it('supports sessionID/messageID signature variant with deterministic selection', async () => {
     const diagnostics: any[] = []
+    let callArg: any
     const updateMessageAtomic = async ({
-      sessionID: _sessionID,
-      messageID
+      sessionID,
+      messageID,
+      mutate
     }: {
       sessionID: string
       messageID: string
+      mutate: (draft: any) => void
     }) => {
-      if (!messageID) {
-        throw new Error('missing messageID')
-      }
+      callArg = { sessionID, messageID, mutate }
     }
 
     const compat = buildRuntimeCompat({
@@ -178,11 +201,16 @@ describe('runtime compatibility', () => {
       onCompatDiagnostic: event => diagnostics.push(event)
     })
 
-    await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow('missing messageID')
+    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
 
     expect(diagnostics).toContainEqual({
       type: 'adapter_selected',
-      adapter: 'client.session.updateMessageAtomic(ctx, id, mutate)'
+      adapter: 'client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })'
+    })
+    expect(callArg).toEqual({
+      sessionID: 's1',
+      messageID: 'msg1',
+      mutate: expect.any(Function)
     })
   })
 
@@ -236,24 +264,17 @@ describe('runtime compatibility', () => {
     })
   })
 
-  it('uses updateMessage adapters when atomic path is structurally absent', async () => {
-    const updateMessage = mock(async () => {})
+  it('returns exact compatibility error when selected adapter requires missing sessionID', async () => {
+    const updateMessageAtomic = async ({ sessionID: _sessionID, messageID: _messageID }: { sessionID: string; messageID: string }) => {}
     const compat = buildRuntimeCompat({
       client: {
         session: {
-          updateMessage
+          updateMessageAtomic
         }
       }
     })
 
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(updateMessage).toHaveBeenCalledTimes(1)
-    expect(updateMessage).toHaveBeenCalledWith({
-      ctx: expect.objectContaining({ sessionID: 's1' }),
-      id: 'msg1',
-      mutate: expect.any(Function)
-    })
+    await expect(compat.updateMessage({} as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
   })
 
   it('emits adapter probe and selected diagnostics in order', async () => {
