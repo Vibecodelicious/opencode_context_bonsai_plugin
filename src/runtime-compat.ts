@@ -6,22 +6,6 @@ export const UPDATE_MESSAGE_COMPAT_ERROR = 'Compatibility error: message updates
 export type MessageMutator = (draft: any) => void
 export type InjectedUpdater = (ctx: any, id: string, mutate: MessageMutator) => Promise<void>
 
-export type CompatDiagnosticEvent =
-  | { type: 'adapter_probe'; adapter: string; available: boolean }
-  | { type: 'adapter_probe_error'; adapter: string; error: string }
-  | { type: 'adapter_selected'; adapter: string }
-  | { type: 'adapter_none_selected' }
-  | { type: 'adapter_invoke_error'; adapter: string; error: string }
-
-type CompatDiagnosticHook = (event: CompatDiagnosticEvent) => void
-
-interface UpdateAdapter {
-  name: string
-  isAvailable(client: any): boolean
-  requiresSessionID?: boolean
-  invoke(args: { client: any; ctx: any; id: string; mutate: MessageMutator }): Promise<void>
-}
-
 export interface RuntimeCompat {
   loadMessages(ctx: any): Promise<WithParts[]>
   updateMessage(ctx: any, id: string, mutate: MessageMutator): Promise<void>
@@ -81,100 +65,14 @@ export function createRuntimeCompat(options?: { injectedUpdater?: InjectedUpdate
   }
 }
 
-const updateAdapters: UpdateAdapter[] = [
-  {
-    name: 'client.session.updateMessageAtomic(ctx, id, mutate)',
-    isAvailable: (client: any) => typeof client?.session?.updateMessageAtomic === 'function',
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessageAtomic(ctx, id, mutate)
-    }
-  },
-  {
-    name: 'client.session.updateMessageAtomic({ ctx, id, mutate })',
-    isAvailable: (client: any) => typeof client?.session?.updateMessageAtomic === 'function',
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessageAtomic({ ctx, id, mutate })
-    }
-  },
-  {
-    name: 'client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })',
-    isAvailable: (client: any) => typeof client?.session?.updateMessageAtomic === 'function',
-    requiresSessionID: true,
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })
-    }
-  },
-  {
-    name: 'client.session.updateMessage({ ctx, id, mutate })',
-    isAvailable: (client: any) => typeof client?.session?.updateMessage === 'function',
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessage({ ctx, id, mutate })
-    }
-  },
-  {
-    name: 'client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })',
-    isAvailable: (client: any) => typeof client?.session?.updateMessage === 'function',
-    requiresSessionID: true,
-    invoke: async ({ client, ctx, id, mutate }) => {
-      await client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })
-    }
-  }
-]
-
-export function buildRuntimeCompat(input: { client?: any; onCompatDiagnostic?: CompatDiagnosticHook }): RuntimeCompat {
-  const onCompatDiagnostic = input.onCompatDiagnostic
-  let selectedAdapter: UpdateAdapter | undefined
-
-  for (const adapter of updateAdapters) {
-    let available = false
-
-    try {
-      available = adapter.isAvailable(input.client)
-    } catch (error) {
-      onCompatDiagnostic?.({
-        type: 'adapter_probe_error',
-        adapter: adapter.name,
-        error: error instanceof Error ? error.message : String(error)
-      })
-      continue
-    }
-
-    onCompatDiagnostic?.({ type: 'adapter_probe', adapter: adapter.name, available })
-
-    if (available) {
-      selectedAdapter = adapter
-      onCompatDiagnostic?.({ type: 'adapter_selected', adapter: adapter.name })
-      break
-    }
-  }
-
-  if (!selectedAdapter) {
-    onCompatDiagnostic?.({ type: 'adapter_none_selected' })
-  }
-
+export function buildRuntimeCompat(input: { client?: any }): RuntimeCompat {
+  const updateMessageAtomic = input.client?.session?.updateMessageAtomic
   const injectedUpdater: InjectedUpdater | undefined =
-    selectedAdapter === undefined
-      ? undefined
-      : async (ctx, id, mutate) => {
-          if (selectedAdapter.requiresSessionID && typeof ctx?.sessionID !== 'string') {
-            throw new Error(UPDATE_MESSAGE_COMPAT_ERROR)
-          }
-
-          if (selectedAdapter.requiresSessionID && ctx.sessionID.trim() === '') {
-            throw new Error(UPDATE_MESSAGE_COMPAT_ERROR)
-          }
-
-          try {
-            await selectedAdapter.invoke({ client: input.client, ctx, id, mutate })
-          } catch (error) {
-            onCompatDiagnostic?.({
-              type: 'adapter_invoke_error',
-              adapter: selectedAdapter.name,
-              error: error instanceof Error ? error.message : String(error)
-            })
-            throw error
-          }
+    typeof updateMessageAtomic === 'function'
+      ? async (ctx, id, mutate) => {
+          await updateMessageAtomic(ctx, id, mutate)
         }
+      : undefined
 
   return createRuntimeCompat({ injectedUpdater })
 }

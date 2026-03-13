@@ -58,21 +58,8 @@ Or place in `.opencode/plugin/` directory.
 `opencode-context-bonsai` supports multiple OpenCode runtime capability tiers:
 
 - **Message reads**: uses `ctx.messages` when available; otherwise falls back to `ctx.client.session.messages({ path: { id: ctx.sessionID } })`.
-- **Message writes**: uses `ctx.updateMessage` when available; otherwise performs one-time capability probing at plugin initialization and selects the first matching updater adapter in this fixed order:
-  1. `client.session.updateMessageAtomic(ctx, id, mutate)`
-  2. `client.session.updateMessageAtomic({ ctx, id, mutate })`
-  3. `client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })`
-  4. `client.session.updateMessage({ ctx, id, mutate })`
-  5. `client.session.updateMessage({ sessionID: ctx.sessionID, messageID: id, mutate })`
-- **Deterministic behavior**: first available adapter is cached for the plugin instance lifetime. There is no call-time re-probe and no fallback to later adapters if the selected adapter throws.
+- **Message writes**: uses `ctx.updateMessage` when available; otherwise uses an internal updater injected at plugin initialization when the runtime exposes an atomic updater capability.
 - **Unsupported runtime behavior**: tools return explicit compatibility errors instead of silently no-oping when required read/write capabilities are unavailable.
-
-Troubleshooting notes:
-
-- If no adapter is available at initialization, prune/retrieve writes return the exact compatibility update error.
-- Adapters that require `ctx.sessionID` reject missing or empty session IDs with the same exact compatibility update error.
-- Adapter invocation failures are treated as native runtime failures and are propagated unchanged (not rewritten as compatibility errors).
-- For debug instrumentation in custom integration tests, `buildRuntimeCompat` accepts `onCompatDiagnostic(event)` events for probe, selection, and invoke failure signals.
 
 Compatibility errors are returned as exact tool output strings:
 
