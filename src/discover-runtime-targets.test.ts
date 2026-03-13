@@ -382,5 +382,8 @@ describe('discover-runtime-targets script helpers', () => {
     const inspection = await collectInspectionData('local', 'fake-opencode', root)
     expect(inspection.inspectionEvidence[0]?.source).toBe('command')
     expect(inspection.inspectionEvidence[0]?.snippet).not.toContain('No such file or directory')
+    expect(inspection.inspectionCommands[2]).toContain('CONTEXT_BONSAI_DISCOVERY_DUMP=1')
+    expect(inspection.inspectionCommands[2]).toContain('CONTEXT_BONSAI_DISCOVERY_OUT=')
+    expect(inspection.inspectionEvidence.some(entry => entry.source === 'runtime')).toBe(true)
   })
 })
