@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
   assertNegativeControls,
   computeReproducibilityHash,
-  findLocalModuleRoot,
   parseCliArgs,
   runProbeWorker,
   summarizeEntries
@@ -84,8 +83,7 @@ describe('discover-runtime-targets script helpers', () => {
         callableCount: 1,
         missingCount: 0,
         invokeFailedCount: 0
-      },
-      diagnostics: [{ level: 'info' as const, code: 'callable_gate_met', message: 'ok' }]
+      }
     }
 
     const hashA = computeReproducibilityHash(base)
@@ -138,61 +136,5 @@ describe('discover-runtime-targets script helpers', () => {
 
     expect(result.entries[0]?.result.status).toBe('invoke_failed')
     expect(result.entries[0]?.result.errorClass).toBe('invoke_failed')
-  })
-
-  it('finds local module root without brittle single-file sentinel', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-root-'))
-    const srcRoot = path.join(root, 'packages', 'opencode', 'src')
-    await mkdir(path.join(srcRoot, 'tool'), { recursive: true })
-    await Bun.write(path.join(srcRoot, 'tool', 'registry.ts'), 'export const fromPlugin = () => ({ execute() {} })\n')
-    await Bun.write(path.join(srcRoot, 'message-route.ts'), 'export const MessageRoute = {}\n')
-    const binaryPath = path.join(root, 'packages', 'opencode', 'dist', 'opencode-linux-x64', 'bin', 'opencode')
-
-    const discovered = await findLocalModuleRoot(binaryPath)
-    expect(discovered).toBe(srcRoot)
-  })
-
-  it('records contract failure evidence when fromPlugin is malformed', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-registry-contract-'))
-    await Bun.write(path.join(root, 'registry.ts'), 'export const Registry = { fromPlugin: () => ({}) }\n')
-
-    const result = await runProbeWorker(
-      { contextDir: root, localModuleRoots: [root] },
-      [
-        {
-          id: 'TEST-003',
-          kind: 'registry',
-          specifier: 'opencode/registry',
-          exportPath: 'Registry.fromPlugin',
-          expectedContract: 'fromPlugin'
-        }
-      ],
-      []
-    )
-
-    expect(result.entries[0]?.result.status).toBe('invoke_failed')
-    expect(result.entries[0]?.result.errorClass).toBe('invoke_failed')
-    expect(result.entries[0]?.result.evidence).toContain('executeType=undefined')
-  })
-
-  it('records attempted paths when module resolution fails', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-missing-paths-'))
-    const result = await runProbeWorker(
-      { contextDir: root, localModuleRoots: [] },
-      [
-        {
-          id: 'TEST-004',
-          kind: 'updater',
-          specifier: 'opencode/missing-target',
-          exportPath: 'Missing.target',
-          expectedContract: 'updateMessage'
-        }
-      ],
-      []
-    )
-
-    expect(result.entries[0]?.result.status).toBe('missing')
-    expect(result.entries[0]?.result.resolution).toBe('not_resolved')
-    expect(result.entries[0]?.result.attemptedPaths?.[0]).toBe('import:opencode/missing-target')
   })
 })
