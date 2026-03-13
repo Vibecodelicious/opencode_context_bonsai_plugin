@@ -76,8 +76,6 @@ Troubleshooting notes:
 - Selected injector invocation failures are treated as native runtime failures and are propagated unchanged (not rewritten as compatibility errors).
 - For debug instrumentation in custom integration tests, `buildRuntimeCompat` accepts `onCompatDiagnostic(event)` with probe/selection/source/invoke diagnostics (`injector_*`, `injector_source`, `update_path`).
 - Generate runtime target evidence artifacts with `bun run scripts/discover-runtime-targets.ts --runtime <stock|local> --out /tmp/runtime-discovery-<runtime>.json`.
-- Optional runtime-object discovery dump: set `CONTEXT_BONSAI_DISCOVERY_DUMP=1` and `CONTEXT_BONSAI_DISCOVERY_OUT=/tmp/context-bonsai-runtime-dump.json` to capture bounded key-family summaries for plugin init input/client and tool execute context.
-- Discovery artifacts now emit `schemaVersion: "2"` with `candidateFindings`, `inspectionEvidence`, and `decisionGate` (`READY_FOR_INJECTION_IMPL` or `DISCOVERY_INCOMPLETE` with blocker codes).
 
 Compatibility errors are returned as exact tool output strings:
 

@@ -3,16 +3,10 @@ import { mkdir, mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  addSyntheticRequiredClassRejects,
   assertNegativeControls,
-  buildDecisionGate,
-  dedupeAndRankCandidates,
-  extractBundleTextCandidates,
   computeReproducibilityHash,
   findLocalModuleRoot,
-  normalizeSnippet,
   parseCliArgs,
-  parseRuntimeDump,
   runProbeWorker,
   summarizeEntries
 } from '../scripts/discover-runtime-targets'
@@ -60,14 +54,7 @@ describe('discover-runtime-targets script helpers', () => {
 
   it('computes deterministic hash independent from generatedAt', () => {
     const base = {
-      schemaVersion: '2' as const,
-      inspectionCommands: ['file /tmp/runtime'],
-      inspectionEnvironment: {
-        cwd: '/tmp',
-        runtimeName: 'stock' as const,
-        runtimeBinary: '/tmp/runtime'
-      },
-      inspectionEvidence: [{ source: 'command' as const, ref: 'file /tmp/runtime', snippet: 'ELF', order: 1 }],
+      schemaVersion: '1' as const,
       runtime: {
         name: 'stock' as const,
         binary: '/tmp/runtime',
@@ -92,23 +79,6 @@ describe('discover-runtime-targets script helpers', () => {
         }
       ],
       negativeControls: [{ specifier: 'bad', exportPath: 'Nope.missing', status: 'module_not_found' as const }],
-      candidateFindings: [
-        {
-          kind: 'registry' as const,
-          sourceType: 'import-resolvable' as const,
-          compatSource: 'module' as const,
-          logicalTargetKey: 'registry:fromPlugin',
-          identifier: '@opencode-ai/opencode/tool/registry:PluginToolRegistry.fromPlugin',
-          evidence: 'callable_shape_match',
-          confidence: 0.85,
-          validationState: 'validated' as const,
-          validationReason: 'callable_shape_match'
-        }
-      ],
-      decisionGate: {
-        status: 'DISCOVERY_INCOMPLETE' as const,
-        blockerCodes: ['missing_updater_target' as const]
-      },
       summary: {
         resolvedCount: 1,
         callableCount: 1,
@@ -224,72 +194,5 @@ describe('discover-runtime-targets script helpers', () => {
     expect(result.entries[0]?.result.status).toBe('missing')
     expect(result.entries[0]?.result.resolution).toBe('not_resolved')
     expect(result.entries[0]?.result.attemptedPaths?.[0]).toBe('import:opencode/missing-target')
-  })
-
-  it('normalizes inspection snippets with stable length bound', () => {
-    const normalized = normalizeSnippet('a\n\n b   c '.repeat(40))
-    expect(normalized.includes('\n')).toBe(false)
-    expect(normalized.length).toBeLessThanOrEqual(240)
-  })
-
-  it('dedupes candidates by source precedence and adds corroboration bonus', () => {
-    const deduped = dedupeAndRankCandidates([
-      {
-        kind: 'registry',
-        sourceType: 'bundle-symbol',
-        logicalTargetKey: 'registry:fromPlugin',
-        identifier: 'bundle-token:fromPlugin',
-        evidence: 'bundle token',
-        exactTokenMatch: true,
-        partialPathMatch: false,
-        adapterSimulationPassed: false,
-        validationState: 'rejected',
-        validationReason: 'textual_only'
-      },
-      {
-        kind: 'registry',
-        sourceType: 'runtime-object-path',
-        logicalTargetKey: 'registry:fromPlugin',
-        identifier: 'toolExecuteContext:tool.registry.fromPlugin',
-        evidence: 'callable hit',
-        exactTokenMatch: true,
-        partialPathMatch: false,
-        adapterSimulationPassed: true,
-        validationState: 'validated',
-        validationReason: 'callable_shape_match'
-      }
-    ])
-
-    expect(deduped).toHaveLength(1)
-    expect(deduped[0]?.sourceType).toBe('runtime-object-path')
-    expect(deduped[0]?.confidence).toBe(1)
-  })
-
-  it('extracts bundle textual candidates from token lines', () => {
-    const extracted = extractBundleTextCandidates(['Session updateMessageAtomic ToolRegistry fromPlugin'])
-    const keys = extracted.map(entry => entry.logicalTargetKey)
-    expect(keys).toContain('registry:fromPlugin')
-    expect(keys).toContain('updater:updateMessageAtomic')
-  })
-
-  it('parses runtime dump payload and produces gate blockers from synthetic rejects', () => {
-    const runtimeDump = parseRuntimeDump(
-      JSON.stringify({
-        schemaVersion: '1',
-        roots: {
-          toolExecuteContext: {
-            capturedAt: new Date().toISOString(),
-            visitedNodes: 3,
-            truncated: false,
-            hits: [{ path: 'tool.registry.fromPlugin', kind: 'function' }]
-          }
-        }
-      })
-    )
-    expect(runtimeDump).not.toBeNull()
-
-    const gate = buildDecisionGate(addSyntheticRequiredClassRejects([]))
-    expect(gate.status).toBe('DISCOVERY_INCOMPLETE')
-    expect(gate.blockerCodes).toEqual(['registry_rejected', 'updater_rejected'])
   })
 })
