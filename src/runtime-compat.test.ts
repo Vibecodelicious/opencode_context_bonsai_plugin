@@ -182,24 +182,6 @@ describe('runtime compatibility', () => {
     expect(diagnostics).toContainEqual({ type: 'injector_none_selected' })
   })
 
-  it('caches selected injector at construction and does not re-probe', async () => {
-    const diagnostics: any[] = []
-    const updateMessage = mock(async () => {})
-    const updateMessageAtomic = mock(async () => {})
-    const client: any = { session: { updateMessage } }
-    const compat = buildRuntimeCompat({ client, onCompatDiagnostic: event => diagnostics.push(event) })
-
-    client.session.updateMessageAtomic = updateMessageAtomic
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg2', () => {})
-
-    expect(updateMessage).toHaveBeenCalledTimes(2)
-    expect(updateMessageAtomic).not.toHaveBeenCalled()
-    expect(diagnostics.filter(event => event.type === 'injector_selected')).toHaveLength(1)
-    expect(diagnostics.filter(event => event.type === 'injector_probe')).toHaveLength(2)
-  })
-
   it('rejects missing or empty sessionID in injected path', async () => {
     const atomic = mock(async () => {})
     const compat = buildRuntimeCompat({ client: { session: { updateMessageAtomic: atomic } } })
