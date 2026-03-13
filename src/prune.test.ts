@@ -3,7 +3,7 @@ import { pruneToolDefinition, createPruneToolDefinition } from './prune'
 import { makeUserMessage, makeAssistantMessage } from './test/fixtures'
 import { clearSessionState, getIdVisibility, setIdVisibility } from './state'
 import { PLUGIN_ID } from './constants'
-import { createRuntimeCompat, buildRuntimeCompat } from './runtime-compat'
+import { createRuntimeCompat } from './runtime-compat'
 
 describe('prune tool', () => {
   const sessionID = 'test-session'
@@ -435,45 +435,5 @@ describe('prune tool', () => {
     } as any)
 
     expect(result).toBe('Compatibility error: message updates are unsupported in this runtime.')
-  })
-
-  test('module-backed injected updater succeeds without native ctx.updateMessage', async () => {
-    const updateMessageAtomic = mock(async ({ mutate }: any) => {
-      const draft = { metadata: {} }
-      mutate(draft)
-    })
-    const runtimeCompat = await buildRuntimeCompat({
-      client: {},
-      resolveInternal: specifier => {
-        if (specifier === '@opencode-ai/opencode/session') {
-          return { Session: { updateMessageAtomic } }
-        }
-        throw new Error('module missing')
-      }
-    })
-    const compatTool = createPruneToolDefinition(runtimeCompat)
-    const messages = [makeUserMessage('msg1', sessionID, 'Hello')]
-
-    const result = await compatTool.execute({
-      from_pattern: 'Hello',
-      to_pattern: 'Hello',
-      summary: 'single message summary',
-      index_terms: ['single', 'message', 'summary']
-    }, {
-      sessionID,
-      messages: messages.map(msg => ({
-        info: {
-          id: msg.id,
-          sessionID: msg.sessionID,
-          role: msg.role,
-          metadata: msg.metadata,
-          time: { created: msg.createdAt.getTime() }
-        },
-        parts: msg.parts
-      }))
-    } as any)
-
-    expect(result).toContain('Archived 1 messages')
-    expect(updateMessageAtomic).toHaveBeenCalledTimes(1)
   })
 })

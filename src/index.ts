@@ -9,22 +9,8 @@ import { createPruneToolDefinition } from "./prune"
 import { convertPluginMessages } from "./convert"
 import { buildRuntimeCompat } from "./runtime-compat"
 
-function isCompatDiagnosticsEnabled(): boolean {
-  const raw = process.env.CONTEXT_BONSAI_COMPAT_DIAGNOSTICS
-  if (!raw) return false
-  const normalized = raw.trim().toLowerCase()
-  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
-}
-
 export const contextBonsai: Plugin = async (input) => {
-  const runtimeCompat = await buildRuntimeCompat({
-    client: (input as any).client,
-    onCompatDiagnostic: isCompatDiagnosticsEnabled()
-      ? event => {
-          console.error(`[context-bonsai][compat] ${JSON.stringify(event)}`)
-        }
-      : undefined
-  })
+  const runtimeCompat = buildRuntimeCompat({ client: (input as any).client })
 
   return {
     tool: {

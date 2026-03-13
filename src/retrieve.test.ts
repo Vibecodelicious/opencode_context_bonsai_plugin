@@ -3,7 +3,7 @@ import { retrieveTool, createRetrieveTool } from "./retrieve"
 import { makeArchivedMessage, makeUserMessage } from "./test/fixtures"
 import { setSameStepPrunes } from "./state"
 import { PLUGIN_ID } from "./constants"
-import { createRuntimeCompat, buildRuntimeCompat } from "./runtime-compat"
+import { createRuntimeCompat } from "./runtime-compat"
 
 describe("retrieve tool", () => {
   const mockContext = {
@@ -135,34 +135,5 @@ describe("retrieve tool", () => {
     } as any)
 
     expect(result).toBe("Compatibility error: message updates are unsupported in this runtime.")
-  })
-
-  it("module-backed injected updater restores archive without native ctx.updateMessage", async () => {
-    const updateMessageAtomic = async ({ mutate }: any) => {
-      const draft = { metadata: { [PLUGIN_ID]: { archive: {} } } }
-      mutate(draft)
-    }
-    const runtimeCompat = await buildRuntimeCompat({
-      client: {},
-      resolveInternal: specifier => {
-        if (specifier === '@opencode-ai/opencode/session') {
-          return { Session: { updateMessageAtomic } }
-        }
-        throw new Error('module missing')
-      }
-    })
-    const compatTool = createRetrieveTool(runtimeCompat)
-    const archived = makeArchivedMessage("msg1", "test-session", PLUGIN_ID, {
-      summary: "Test summary",
-      indexTerms: ["test"],
-      rangeEnd: "msg1"
-    })
-
-    const result = await compatTool.execute({ anchor_id: "msg1" }, {
-      sessionID: "test-session",
-      messages: [toPluginMessage(archived)]
-    } as any)
-
-    expect(result).toBe("Restored 1 messages from range msg1 to msg1. Original content is now visible.")
   })
 })
