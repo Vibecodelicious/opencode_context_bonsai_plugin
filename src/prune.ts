@@ -4,7 +4,6 @@ import { PLUGIN_ID } from './constants'
 import type { WithParts } from './test/fixtures'
 import { resolvePatternBoundary } from './prune-pattern'
 import { createRuntimeCompat, isRuntimeCompatError, type RuntimeCompat } from './runtime-compat'
-import { captureDiscoveryRoot } from './discovery-dump'
 
 function findMessageIndex(messages: WithParts[], id: string): number | null {
   const index = messages.findIndex(msg => msg.id === id)
@@ -113,8 +112,6 @@ export function createPruneToolDefinition(runtimeCompat: RuntimeCompat): ToolDef
       index_terms: tool.schema.array(tool.schema.string()).optional().describe('Keywords for retrieval, 3-8 terms')
     },
     async execute(rawArgs, ctx) {
-      await captureDiscoveryRoot('toolExecuteContext', ctx)
-
       const args = rawArgs as any
       let messages: WithParts[]
 

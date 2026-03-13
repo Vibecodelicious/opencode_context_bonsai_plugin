@@ -8,7 +8,6 @@ import { createRetrieveTool } from "./retrieve"
 import { createPruneToolDefinition } from "./prune"
 import { convertPluginMessages } from "./convert"
 import { buildRuntimeCompat } from "./runtime-compat"
-import { captureDiscoveryRoot } from './discovery-dump'
 
 function isCompatDiagnosticsEnabled(): boolean {
   const raw = process.env.CONTEXT_BONSAI_COMPAT_DIAGNOSTICS
@@ -18,9 +17,6 @@ function isCompatDiagnosticsEnabled(): boolean {
 }
 
 export const contextBonsai: Plugin = async (input) => {
-  await captureDiscoveryRoot('pluginInitInput', input)
-  await captureDiscoveryRoot('pluginInitClient', (input as any).client)
-
   const runtimeCompat = await buildRuntimeCompat({
     client: (input as any).client,
     onCompatDiagnostic: isCompatDiagnosticsEnabled()

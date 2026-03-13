@@ -4,7 +4,6 @@ import { getSameStepPrunes } from "./state"
 import { PLUGIN_ID } from "./constants"
 import type { WithParts } from "./test/fixtures"
 import { createRuntimeCompat, isRuntimeCompatError, type RuntimeCompat } from "./runtime-compat"
-import { captureDiscoveryRoot } from './discovery-dump'
 
 export function createRetrieveTool(runtimeCompat: RuntimeCompat): ToolDefinition {
   return tool({
@@ -13,8 +12,6 @@ export function createRetrieveTool(runtimeCompat: RuntimeCompat): ToolDefinition
       anchor_id: tool.schema.string().describe("The ID of the anchor message to restore")
     },
     async execute(args, ctx) {
-      await captureDiscoveryRoot('toolExecuteContext', ctx)
-
       const { anchor_id } = args
       let messages: WithParts[]
 
