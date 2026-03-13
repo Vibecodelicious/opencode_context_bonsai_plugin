@@ -8,8 +8,7 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --declaration --declarationDir dist",
     "test": "bun test",
-    "report:sessions": "bun scripts/list-bonsai-sessions.ts",
-    "discover:runtime-targets": "bun run scripts/discover-runtime-targets.ts"
+    "report:sessions": "bun scripts/list-bonsai-sessions.ts"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "*"
