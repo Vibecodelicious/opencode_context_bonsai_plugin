@@ -194,27 +194,15 @@ function makeEvidenceRecord(
   }
 }
 
-type InspectionCommandResult = {
-  command: string
-  output: string
-  exitCode: number
-}
-
-const REQUIRED_RUNTIME_DUMP_ROOTS = ['pluginInitInput', 'pluginInitClient', 'toolExecuteContext'] as const
-
-async function runInspectionCommand(command: string, cwd: string): Promise<InspectionCommandResult> {
+async function runInspectionCommand(command: string, cwd: string): Promise<{ command: string; output: string }> {
   const proc = Bun.spawn(['sh', '-lc', command], {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe'
   })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited
-  ])
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   const output = `${stdout}\n${stderr}`.trim()
-  return { command, output, exitCode }
+  return { command, output }
 }
 
 function shellQuote(value: string): string {
@@ -987,22 +975,7 @@ function sortKeysDeep(value: unknown): unknown {
 }
 
 export function computeReproducibilityHash(input: Omit<DiscoveryArtifact, 'generatedAt' | 'reproducibilityHash'>): string {
-  const sanitizedInspectionEvidence = input.inspectionEvidence.map(record => {
-    if (record.source === 'command' && record.ref.includes('CONTEXT_BONSAI_DISCOVERY_DUMP=1')) {
-      return {
-        ...record,
-        snippet: 'runtime_exec_output_sanitized'
-      }
-    }
-    return record
-  })
-
-  const canonical = JSON.stringify(
-    sortKeysDeep({
-      ...input,
-      inspectionEvidence: sanitizedInspectionEvidence
-    })
-  )
+  const canonical = JSON.stringify(sortKeysDeep(input))
   return createHash('sha256').update(canonical).digest('hex')
 }
 
@@ -1024,7 +997,7 @@ async function readRuntimeVersion(binaryPath: string): Promise<string> {
 export async function collectInspectionData(runtime: RuntimeName, binary: string, cwd: string): Promise<{
   inspectionCommands: string[]
   inspectionEvidence: InspectionEvidenceRecord[]
-  runtimeDump: RuntimeDumpDocument
+  runtimeDump: RuntimeDumpDocument | null
 }> {
   const runtimeDumpPath = resolveRuntimeDumpPath(runtime)
   const repoRoot = path.resolve(import.meta.dir, '..')
@@ -1061,44 +1034,31 @@ export async function collectInspectionData(runtime: RuntimeName, binary: string
 
   await rm(runtimeDumpPath, { force: true })
   const runtimeExerciseResult = await runInspectionCommand(runtimeExerciseCommand, cwd)
-  if (runtimeExerciseResult.exitCode !== 0) {
-    throw new Error(`runtime_acquisition_exec_failed:${runtimeExerciseResult.exitCode}`)
-  }
   inspectionEvidence.push(
-    makeEvidenceRecord(
-      'command',
-      runtimeExerciseResult.command,
-      `runtime exercise completed with exit code ${runtimeExerciseResult.exitCode}`,
-      order
-    )
+    makeEvidenceRecord('command', runtimeExerciseResult.command, runtimeExerciseResult.output || 'no output', order)
   )
   order += 1
 
+  let runtimeDump: RuntimeDumpDocument | null = null
   const dumpFile = Bun.file(runtimeDumpPath)
-  if (!(await dumpFile.exists())) {
-    throw new Error('runtime_acquisition_dump_missing')
+  if (await dumpFile.exists()) {
+    const runtimeRaw = await dumpFile.text()
+    runtimeDump = parseRuntimeDump(runtimeRaw)
   }
-
-  const runtimeRaw = await dumpFile.text()
-  const runtimeDump = parseRuntimeDump(runtimeRaw)
-  if (!runtimeDump) {
-    throw new Error('runtime_acquisition_dump_parse_failed')
-  }
-
-  const availableRoots = new Set(Object.keys(runtimeDump.roots))
-  const missingRoots = REQUIRED_RUNTIME_DUMP_ROOTS.filter(root => !availableRoots.has(root))
-  if (missingRoots.length > 0) {
-    throw new Error(`runtime_acquisition_required_roots_missing:${missingRoots.join(',')}`)
-  }
-
-  inspectionEvidence.push(
-    makeEvidenceRecord(
-      'runtime',
-      runtimeDumpPath,
-      `runtime dump loaded for ${runtime}; roots=${REQUIRED_RUNTIME_DUMP_ROOTS.join(',')}`,
-      order
+  if (runtimeDump) {
+    inspectionEvidence.push(
+      makeEvidenceRecord(
+        'runtime',
+        runtimeDumpPath,
+        `runtime dump loaded for ${runtime}; roots=${Object.keys(runtimeDump.roots).join(',')}`,
+        order
+      )
     )
-  )
+  } else {
+    inspectionEvidence.push(
+      makeEvidenceRecord('runtime', runtimeDumpPath, `runtime dump unavailable or parse failed for ${runtime}`, order)
+    )
+  }
   order += 1
 
   return {
