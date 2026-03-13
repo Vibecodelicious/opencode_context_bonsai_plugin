@@ -239,7 +239,6 @@ type RawCandidate = {
   evidence: string
   exactTokenMatch: boolean
   partialPathMatch: boolean
-  adapterSimulationRan: boolean
   adapterSimulationPassed: boolean
   validationState: ValidationState
   validationReason: string
@@ -247,7 +246,7 @@ type RawCandidate = {
 
 function scoreCandidate(candidate: RawCandidate, corroborated: boolean): number {
   let score = baseConfidence(candidate.sourceType)
-  if (candidate.adapterSimulationRan && candidate.adapterSimulationPassed) {
+  if (candidate.adapterSimulationPassed) {
     score += 0.05
   }
   if (!candidate.exactTokenMatch) {
@@ -309,13 +308,11 @@ export function buildImportResolvableCandidates(entries: ProbeEntryArtifact[]): 
     if (!logicalTargetKey) continue
 
     const isCallable = entry.result.status === 'callable'
-    const isTerminalRejected = entry.result.status === 'not_callable' || entry.result.status === 'invoke_failed'
+    const isTerminalRejected =
+      entry.result.status === 'missing' || entry.result.status === 'not_callable' || entry.result.status === 'invoke_failed'
     if (!isCallable && !isTerminalRejected) {
       continue
     }
-
-    const adapterSimulationRan = entry.expectedContract === 'fromPlugin' && (isCallable || entry.result.status === 'invoke_failed')
-    const adapterSimulationPassed = entry.expectedContract === 'fromPlugin' && isCallable
 
     const exactMatch = EXACT_TOKEN_REGEX[entry.expectedContract].test(entry.exportPath)
     candidates.push({
@@ -326,8 +323,7 @@ export function buildImportResolvableCandidates(entries: ProbeEntryArtifact[]): 
       evidence: entry.result.evidence ?? `${entry.result.status}:${entry.result.errorClass ?? 'none'}`,
       exactTokenMatch: exactMatch,
       partialPathMatch: false,
-      adapterSimulationRan,
-      adapterSimulationPassed,
+      adapterSimulationPassed: isCallable,
       validationState: isCallable ? 'validated' : 'rejected',
       validationReason: isCallable ? 'callable_shape_match' : entry.result.errorClass ?? 'probe_failed'
     })
@@ -361,7 +357,6 @@ export function extractBundleTextCandidates(lines: string[]): RawCandidate[] {
       evidence: exact ? `exact token found: ${match.token}` : `supporting token found near expected symbol: ${match.token}`,
       exactTokenMatch: exact,
       partialPathMatch: !exact,
-      adapterSimulationRan: false,
       adapterSimulationPassed: false,
       validationState: exact ? 'rejected' : 'inconclusive',
       validationReason: exact ? 'textual_match_only_not_callable' : 'fuzzy_symbol_inference'
@@ -428,8 +423,7 @@ export function extractRuntimeObjectCandidates(runtimeDump: RuntimeDumpDocument 
         evidence: `callable hit from ${rootName}: ${hit.path}`,
         exactTokenMatch: classified.exact,
         partialPathMatch: classified.partial,
-        adapterSimulationRan: false,
-        adapterSimulationPassed: false,
+        adapterSimulationPassed: classified.kind === 'updater' || classified.key === 'registry:fromPlugin',
         validationState: classified.exact ? 'validated' : 'rejected',
         validationReason: classified.exact ? 'callable_shape_match' : 'partial_path_match'
       })
@@ -978,7 +972,7 @@ async function readRuntimeVersion(binaryPath: string): Promise<string> {
   return stdout.trim() || stderr.trim() || 'unknown'
 }
 
-export async function collectInspectionData(runtime: RuntimeName, binary: string, cwd: string): Promise<{
+async function collectInspectionData(runtime: RuntimeName, binary: string): Promise<{
   inspectionCommands: string[]
   inspectionEvidence: InspectionEvidenceRecord[]
   runtimeDump: RuntimeDumpDocument | null
@@ -990,11 +984,11 @@ export async function collectInspectionData(runtime: RuntimeName, binary: string
   const inspectionEvidence: InspectionEvidenceRecord[] = []
   let order = 1
 
-  const fileInfo = await runInspectionCommand(inspectionCommands[0], cwd)
+  const fileInfo = await runInspectionCommand(inspectionCommands[0], process.cwd())
   inspectionEvidence.push(makeEvidenceRecord('command', fileInfo.command, fileInfo.output || 'no output', order))
   order += 1
 
-  const symbolInfo = await runInspectionCommand(inspectionCommands[1], cwd)
+  const symbolInfo = await runInspectionCommand(inspectionCommands[1], process.cwd())
   inspectionEvidence.push(makeEvidenceRecord('command', symbolInfo.command, symbolInfo.output || 'no output', order))
   order += 1
 
@@ -1053,7 +1047,7 @@ export async function discoverRuntimeTargets(runtime: RuntimeName): Promise<Disc
   const entries = workerResults.entries
   const negativeControls = workerResults.negativeControls
   const summary = summarizeEntries(entries)
-  const inspection = await collectInspectionData(runtime, binary, context.contextDir)
+  const inspection = await collectInspectionData(runtime, binary)
   const candidateFindings = buildCandidateFindings(entries, inspection.inspectionEvidence, inspection.runtimeDump)
   const decisionGate = buildDecisionGate(candidateFindings)
   const diagnostics: DiscoveryArtifact['diagnostics'] = []

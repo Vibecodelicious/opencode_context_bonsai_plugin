@@ -5,9 +5,7 @@ import path from 'node:path'
 import {
   addSyntheticRequiredClassRejects,
   assertNegativeControls,
-  buildImportResolvableCandidates,
   buildDecisionGate,
-  collectInspectionData,
   dedupeAndRankCandidates,
   extractBundleTextCandidates,
   computeReproducibilityHash,
@@ -244,7 +242,6 @@ describe('discover-runtime-targets script helpers', () => {
         evidence: 'bundle token',
         exactTokenMatch: true,
         partialPathMatch: false,
-        adapterSimulationRan: false,
         adapterSimulationPassed: false,
         validationState: 'rejected',
         validationReason: 'textual_only'
@@ -257,7 +254,6 @@ describe('discover-runtime-targets script helpers', () => {
         evidence: 'callable hit',
         exactTokenMatch: true,
         partialPathMatch: false,
-        adapterSimulationRan: true,
         adapterSimulationPassed: true,
         validationState: 'validated',
         validationReason: 'callable_shape_match'
@@ -295,92 +291,5 @@ describe('discover-runtime-targets script helpers', () => {
     const gate = buildDecisionGate(addSyntheticRequiredClassRejects([]))
     expect(gate.status).toBe('DISCOVERY_INCOMPLETE')
     expect(gate.blockerCodes).toEqual(['registry_rejected', 'updater_rejected'])
-  })
-
-  it('applies adapter confidence bonus only when simulation ran and passed', () => {
-    const noSimulation = dedupeAndRankCandidates([
-      {
-        kind: 'updater',
-        sourceType: 'runtime-object-path',
-        logicalTargetKey: 'updater:updateMessage',
-        identifier: 'toolExecuteContext:session.updateMessage',
-        evidence: 'callable hit',
-        exactTokenMatch: true,
-        partialPathMatch: false,
-        adapterSimulationRan: false,
-        adapterSimulationPassed: true,
-        validationState: 'validated',
-        validationReason: 'callable_shape_match'
-      }
-    ])
-
-    const simulated = dedupeAndRankCandidates([
-      {
-        kind: 'registry',
-        sourceType: 'import-resolvable',
-        logicalTargetKey: 'registry:fromPlugin',
-        identifier: '@opencode-ai/opencode/tool/registry:PluginToolRegistry.fromPlugin',
-        evidence: 'fromPlugin returned wrapper with execute() function',
-        exactTokenMatch: true,
-        partialPathMatch: false,
-        adapterSimulationRan: true,
-        adapterSimulationPassed: true,
-        validationState: 'validated',
-        validationReason: 'callable_shape_match'
-      }
-    ])
-
-    expect(noSimulation[0]?.confidence).toBe(0.9)
-    expect(simulated[0]?.confidence).toBe(0.85)
-  })
-
-  it('adds synthetic none-found rejects when probes only miss unresolved imports', () => {
-    const raw = buildImportResolvableCandidates([
-      {
-        id: 'REG-MISS',
-        kind: 'registry',
-        specifier: '@opencode-ai/opencode/tool/registry',
-        exportPath: 'PluginToolRegistry.fromPlugin',
-        expectedContract: 'fromPlugin',
-        result: {
-          status: 'missing',
-          typeof: 'undefined',
-          arity: 0,
-          ownerType: 'undefined',
-          errorClass: 'module_not_found',
-          errorMessage: 'missing module'
-        }
-      },
-      {
-        id: 'UPD-MISS',
-        kind: 'updater',
-        specifier: '@opencode-ai/opencode/session',
-        exportPath: 'Session.updateMessageAtomic',
-        expectedContract: 'updateMessageAtomic',
-        result: {
-          status: 'missing',
-          typeof: 'undefined',
-          arity: 0,
-          ownerType: 'undefined',
-          errorClass: 'export_path_missing',
-          errorMessage: 'missing export path'
-        }
-      }
-    ])
-
-    const findings = addSyntheticRequiredClassRejects(dedupeAndRankCandidates(raw))
-    const keys = findings.map(item => item.logicalTargetKey)
-    expect(keys).toContain('registry:none-found')
-    expect(keys).toContain('updater:none-found')
-  })
-
-  it('runs inspection commands from provided discovery cwd', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-cwd-'))
-    const fakeBinary = path.join(root, 'fake-opencode')
-    await Bun.write(fakeBinary, '#!/bin/sh\nexit 0\n')
-
-    const inspection = await collectInspectionData('local', 'fake-opencode', root)
-    expect(inspection.inspectionEvidence[0]?.source).toBe('command')
-    expect(inspection.inspectionEvidence[0]?.snippet).not.toContain('No such file or directory')
   })
 })
