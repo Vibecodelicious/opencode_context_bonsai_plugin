@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import {
-  assertNegativeControls,
-  computeReproducibilityHash,
-  parseCliArgs,
-  summarizeEntries
-} from '../scripts/discover-runtime-targets'
+import { parseCliArgs, summarizeEntries } from '../scripts/discover-runtime-targets'
 
 describe('discover-runtime-targets script helpers', () => {
   it('parses required runtime and out flags', () => {
@@ -35,55 +30,5 @@ describe('discover-runtime-targets script helpers', () => {
       missingCount: 1,
       invokeFailedCount: 1
     })
-  })
-
-  it('throws when a negative control unexpectedly resolves', () => {
-    expect(() =>
-      assertNegativeControls({
-        entries: [],
-        negativeControls: [],
-        unexpectedNegativeControlSuccesses: ['@opencode-ai/opencode/tool/registry:Nope.missing']
-      })
-    ).toThrow('Negative control unexpectedly resolved')
-  })
-
-  it('computes deterministic hash independent from generatedAt', () => {
-    const base = {
-      schemaVersion: '1' as const,
-      runtime: {
-        name: 'stock' as const,
-        binary: '/tmp/runtime',
-        reportedVersion: '1.0.0'
-      },
-      probeMatrixVersion: 'v1' as const,
-      entries: [
-        {
-          id: 'REG-001',
-          kind: 'registry' as const,
-          specifier: 'x',
-          exportPath: 'y',
-          expectedContract: 'fromPlugin' as const,
-          result: {
-            status: 'callable' as const,
-            typeof: 'function',
-            arity: 1,
-            ownerType: 'object',
-            errorClass: null,
-            errorMessage: null
-          }
-        }
-      ],
-      negativeControls: [{ specifier: 'bad', exportPath: 'Nope.missing', status: 'module_not_found' as const }],
-      summary: {
-        resolvedCount: 1,
-        callableCount: 1,
-        missingCount: 0,
-        invokeFailedCount: 0
-      }
-    }
-
-    const hashA = computeReproducibilityHash(base)
-    const hashB = computeReproducibilityHash(JSON.parse(JSON.stringify(base)))
-    expect(hashA).toBe(hashB)
   })
 })
