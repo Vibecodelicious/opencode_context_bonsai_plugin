@@ -195,7 +195,7 @@ describe('prune tool', () => {
       index_terms: ['pattern', 'chronology', 'validation']
     }, mockCtx as any)
 
-    expect(result).toContain('from_id must precede to_id chronologically')
+    expect(result).toContain('from_pattern must resolve to a message that precedes to_pattern chronologically')
   })
 
   test('pattern mode: successful archiving', async () => {

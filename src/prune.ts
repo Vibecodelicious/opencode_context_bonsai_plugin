@@ -76,14 +76,14 @@ function validatePruneInput(
     const toIndex = findMessageIndex(messages, resolvedToId)!
 
     if (fromIndex > toIndex) {
-      return { error: `from_id must precede to_id chronologically` }
+      return { error: `from_pattern must resolve to a message that precedes to_pattern chronologically` }
     }
 
     if (isInPrunedRange(messages, resolvedFromId, pluginID)) {
-      return { error: `from_id ${fromId} falls within an already-pruned range` }
+      return { error: `from_pattern resolved to ${fromId}, which falls within an already-pruned range` }
     }
     if (isInPrunedRange(messages, resolvedToId, pluginID)) {
-      return { error: `to_id ${toId} falls within an already-pruned range` }
+      return { error: `to_pattern resolved to ${toId}, which falls within an already-pruned range` }
     }
 
     // Check for pending/running tool calls in range
