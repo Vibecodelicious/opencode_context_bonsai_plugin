@@ -8,10 +8,6 @@ Provide machine-verifiable evidence for internal module targets used by compatib
 
 - Generator command (single entrypoint):
   - `bun run scripts/discover-runtime-targets.ts --runtime <stock|local> --out /tmp/runtime-discovery-<runtime>.json`
-- Runtime-object-path acquisition is executed inside generator via real runtime tool execution:
-  - `CONTEXT_BONSAI_DISCOVERY_DUMP=1`
-  - `CONTEXT_BONSAI_DISCOVERY_OUT=/tmp/context-bonsai-runtime-dump-<runtime>.json` (or caller-provided override)
-  - runtime command invokes `context-bonsai-prune` (phase-1/no-args) through `opencode run`
 - Required runtimes:
   - `stock`: `/home/basil/.opencode/bin/opencode`
   - `local`: `/home/basil/projects/opencode_context_management/opencode/packages/opencode/dist/opencode-linux-x64/bin/opencode`

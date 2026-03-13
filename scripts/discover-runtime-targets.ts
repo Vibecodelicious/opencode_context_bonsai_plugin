@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash } from 'node:crypto'
-import { mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 type RuntimeName = 'stock' | 'local'
@@ -203,22 +203,6 @@ async function runInspectionCommand(command: string, cwd: string): Promise<{ com
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   const output = `${stdout}\n${stderr}`.trim()
   return { command, output }
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-function defaultRuntimeDumpPath(runtime: RuntimeName): string {
-  return path.resolve('/tmp', `context-bonsai-runtime-dump-${runtime}.json`)
-}
-
-function resolveRuntimeDumpPath(runtime: RuntimeName): string {
-  const requested = process.env.CONTEXT_BONSAI_DISCOVERY_OUT
-  if (!requested || requested.trim() === '') {
-    return defaultRuntimeDumpPath(runtime)
-  }
-  return path.resolve(requested)
 }
 
 function mapExportPathToLogicalTarget(pathName: string): string | null {
@@ -999,27 +983,9 @@ export async function collectInspectionData(runtime: RuntimeName, binary: string
   inspectionEvidence: InspectionEvidenceRecord[]
   runtimeDump: RuntimeDumpDocument | null
 }> {
-  const runtimeDumpPath = resolveRuntimeDumpPath(runtime)
-  const repoRoot = path.resolve(import.meta.dir, '..')
-  const discoveryPrompt = 'Call the context-bonsai-prune tool with no arguments exactly once, then reply with DONE.'
-  const runtimeExerciseCommand = [
-    'timeout 120s',
-    'env',
-    `CONTEXT_BONSAI_DISCOVERY_DUMP=1`,
-    `CONTEXT_BONSAI_DISCOVERY_OUT=${shellQuote(runtimeDumpPath)}`,
-    shellQuote(binary),
-    'run',
-    '--dir',
-    shellQuote(repoRoot),
-    '--format',
-    'json',
-    shellQuote(discoveryPrompt)
-  ].join(' ')
-
   const inspectionCommands = [
     `file ${binary}`,
-    `strings -n 8 ${binary} | rg "fromPlugin|updateMessageAtomic|updateMessage|patchUpdateMessage|ToolRegistry|Session|MessageRoute"`,
-    runtimeExerciseCommand
+    `strings -n 8 ${binary} | rg "fromPlugin|updateMessageAtomic|updateMessage|patchUpdateMessage|ToolRegistry|Session|MessageRoute"`
   ]
   const inspectionEvidence: InspectionEvidenceRecord[] = []
   let order = 1
@@ -1032,34 +998,31 @@ export async function collectInspectionData(runtime: RuntimeName, binary: string
   inspectionEvidence.push(makeEvidenceRecord('command', symbolInfo.command, symbolInfo.output || 'no output', order))
   order += 1
 
-  await rm(runtimeDumpPath, { force: true })
-  const runtimeExerciseResult = await runInspectionCommand(runtimeExerciseCommand, cwd)
-  inspectionEvidence.push(
-    makeEvidenceRecord('command', runtimeExerciseResult.command, runtimeExerciseResult.output || 'no output', order)
-  )
-  order += 1
-
+  const runtimeDumpPath = process.env.CONTEXT_BONSAI_DISCOVERY_OUT
   let runtimeDump: RuntimeDumpDocument | null = null
-  const dumpFile = Bun.file(runtimeDumpPath)
-  if (await dumpFile.exists()) {
-    const runtimeRaw = await dumpFile.text()
-    runtimeDump = parseRuntimeDump(runtimeRaw)
-  }
-  if (runtimeDump) {
-    inspectionEvidence.push(
-      makeEvidenceRecord(
-        'runtime',
-        runtimeDumpPath,
-        `runtime dump loaded for ${runtime}; roots=${Object.keys(runtimeDump.roots).join(',')}`,
-        order
+  if (runtimeDumpPath && runtimeDumpPath.trim() !== '') {
+    const absoluteRuntimeDumpPath = path.resolve(runtimeDumpPath)
+    const dumpFile = Bun.file(absoluteRuntimeDumpPath)
+    if (await dumpFile.exists()) {
+      const runtimeRaw = await dumpFile.text()
+      runtimeDump = parseRuntimeDump(runtimeRaw)
+    }
+    if (runtimeDump) {
+      inspectionEvidence.push(
+        makeEvidenceRecord(
+          'runtime',
+          absoluteRuntimeDumpPath,
+          `runtime dump loaded for ${runtime}; roots=${Object.keys(runtimeDump.roots).join(',')}`,
+          order
+        )
       )
-    )
-  } else {
-    inspectionEvidence.push(
-      makeEvidenceRecord('runtime', runtimeDumpPath, `runtime dump unavailable or parse failed for ${runtime}`, order)
-    )
+    } else {
+      inspectionEvidence.push(
+        makeEvidenceRecord('runtime', absoluteRuntimeDumpPath, `runtime dump unavailable or parse failed for ${runtime}`, order)
+      )
+    }
+    order += 1
   }
-  order += 1
 
   return {
     inspectionCommands,
