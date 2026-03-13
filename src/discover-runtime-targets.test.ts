@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtemp } from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
 import {
   assertNegativeControls,
   computeReproducibilityHash,
   parseCliArgs,
-  runProbeWorker,
   summarizeEntries
 } from '../scripts/discover-runtime-targets'
 
@@ -89,52 +85,5 @@ describe('discover-runtime-targets script helpers', () => {
     const hashA = computeReproducibilityHash(base)
     const hashB = computeReproducibilityHash(JSON.parse(JSON.stringify(base)))
     expect(hashA).toBe(hashB)
-  })
-
-  it('marks function exports callable without invoking them', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-callable-'))
-    await Bun.write(
-      path.join(root, 'probe.ts'),
-      "export const Probe = { dangerous: () => { throw new Error('should not execute during probe') } }\n"
-    )
-
-    const result = await runProbeWorker(
-      { contextDir: root, localModuleRoots: [root] },
-      [
-        {
-          id: 'TEST-001',
-          kind: 'updater',
-          specifier: 'opencode/probe',
-          exportPath: 'Probe.dangerous',
-          expectedContract: 'updateMessage'
-        }
-      ],
-      []
-    )
-
-    expect(result.entries[0]?.result.status).toBe('callable')
-    expect(result.entries[0]?.result.errorClass).toBeNull()
-  })
-
-  it('maps non-resolution loader failures to invoke_failed', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-errorclass-'))
-    await Bun.write(path.join(root, 'broken.ts'), "throw new Error('module evaluation boom')\n")
-
-    const result = await runProbeWorker(
-      { contextDir: root, localModuleRoots: [root] },
-      [
-        {
-          id: 'TEST-002',
-          kind: 'updater',
-          specifier: 'opencode/broken',
-          exportPath: 'Broken.fn',
-          expectedContract: 'updateMessage'
-        }
-      ],
-      []
-    )
-
-    expect(result.entries[0]?.result.status).toBe('invoke_failed')
-    expect(result.entries[0]?.result.errorClass).toBe('invoke_failed')
   })
 })

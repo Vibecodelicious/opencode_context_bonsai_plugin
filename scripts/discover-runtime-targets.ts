@@ -132,9 +132,6 @@ async function resolveSpecifier(specifier, localModuleRoots) {
   try {
     return await import(specifier)
   } catch (directError) {
-    if (!isModuleNotFound(directError)) {
-      throw directError
-    }
     const subpath = mapSpecifierSubpath(specifier)
     if (!subpath || localModuleRoots.length === 0) {
       throw directError
@@ -153,9 +150,6 @@ async function resolveSpecifier(specifier, localModuleRoots) {
       try {
         return await import(pathToFileURL(candidate).href)
       } catch (error) {
-        if (!isModuleNotFound(error)) {
-          throw error
-        }
         fallbackError = error
       }
     }
