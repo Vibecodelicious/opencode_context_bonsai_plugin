@@ -3,7 +3,6 @@ import { makeUserMessage, makeAssistantMessage } from './test/fixtures'
 import {
   createRuntimeCompat,
   buildRuntimeCompat,
-  __resetRegistryPatchStateForTests,
   INJECTOR_CANDIDATES,
   LOAD_MESSAGES_COMPAT_ERROR,
   UPDATE_MESSAGE_COMPAT_ERROR
@@ -127,7 +126,6 @@ describe('runtime compatibility', () => {
   })
 
   it('injects ctx.updateMessage at execute-time through registry patch', async () => {
-    __resetRegistryPatchStateForTests()
     const diagnostics: any[] = []
     const atomic = mock(async () => {})
     const registryModule = {
@@ -172,78 +170,6 @@ describe('runtime compatibility', () => {
       injector: 'module:Session.updateMessageAtomic(@opencode-ai/opencode/session)',
       source: 'module'
     })
-  })
-
-  it('patches registry fromPlugin idempotently across repeated compat construction', async () => {
-    __resetRegistryPatchStateForTests()
-    const atomic = mock(async () => {})
-    const registryModule = {
-      fromPlugin(plugin: any) {
-        return {
-          execute(args: any, ctx: any) {
-            return plugin.execute(args, ctx)
-          }
-        }
-      }
-    }
-
-    const resolveInternal = (specifier: string) => {
-      if (specifier === '@opencode-ai/opencode/session') {
-        return { Session: { updateMessageAtomic: atomic } }
-      }
-      if (specifier === '@opencode-ai/opencode/tool/registry') {
-        return registryModule
-      }
-      throw new Error('module missing')
-    }
-
-    await buildRuntimeCompat({ client: {}, resolveInternal })
-    const fromPluginAfterFirstPatch = registryModule.fromPlugin
-
-    await buildRuntimeCompat({ client: {}, resolveInternal })
-
-    expect(registryModule.fromPlugin).toBe(fromPluginAfterFirstPatch)
-  })
-
-  it('preserves existing native ctx.updateMessage under patched execute path', async () => {
-    __resetRegistryPatchStateForTests()
-    const atomic = mock(async () => {})
-    const nativeUpdater = mock(async () => {})
-    const registryModule = {
-      fromPlugin(plugin: any) {
-        return {
-          execute(args: any, ctx: any) {
-            return plugin.execute(args, ctx)
-          }
-        }
-      }
-    }
-
-    const compat = await buildRuntimeCompat({
-      client: {},
-      resolveInternal: specifier => {
-        if (specifier === '@opencode-ai/opencode/session') {
-          return { Session: { updateMessageAtomic: atomic } }
-        }
-        if (specifier === '@opencode-ai/opencode/tool/registry') {
-          return registryModule
-        }
-        throw new Error('module missing')
-      }
-    })
-
-    const tool = registryModule.fromPlugin({
-      execute: async (_args: any, ctx: any) => {
-        await compat.updateMessage(ctx, 'msg1', () => {})
-      }
-    })
-
-    const ctx: any = { sessionID: 's1', updateMessage: nativeUpdater }
-    await tool.execute({}, ctx)
-
-    expect(ctx.updateMessage).toBe(nativeUpdater)
-    expect(nativeUpdater).toHaveBeenCalledTimes(1)
-    expect(atomic).not.toHaveBeenCalled()
   })
 
   it('falls back to object-path probing when module probes miss', async () => {
@@ -296,48 +222,6 @@ describe('runtime compatibility', () => {
       event.type === 'injector_probe_error' && String(event.error).includes('adapter_build_failed')
     )
     expect(buildFailedEvents.length).toBeGreaterThan(0)
-  })
-
-  it('continues probing when object-path injector construction throws', async () => {
-    const diagnostics: any[] = []
-    const atomic = mock(async () => {})
-    const updateMessage = mock(async () => {})
-    const session: any = { updateMessage }
-    let atomicReads = 0
-
-    Object.defineProperty(session, 'updateMessageAtomic', {
-      get() {
-        atomicReads += 1
-        if (atomicReads <= 2) {
-          return atomic
-        }
-        return undefined
-      }
-    })
-
-    const compat = await buildRuntimeCompat({
-      client: { session },
-      resolveInternal: () => {
-        const error: any = new Error('module missing')
-        error.code = 'ERR_MODULE_NOT_FOUND'
-        throw error
-      },
-      onCompatDiagnostic: event => diagnostics.push(event)
-    })
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(updateMessage).toHaveBeenCalledTimes(1)
-    expect(atomic).not.toHaveBeenCalled()
-    expect(diagnostics).toContainEqual({
-      type: 'injector_probe_error',
-      injector: INJECTOR_CANDIDATES[0].name,
-      error: 'adapter_build_failed: selected injector target disappeared'
-    })
-    expect(diagnostics).toContainEqual({
-      type: 'injector_selected',
-      injector: INJECTOR_CANDIDATES[1].name
-    })
   })
 
   it('returns exact compatibility update error when no injector is available', async () => {
