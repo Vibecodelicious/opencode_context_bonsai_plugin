@@ -20,10 +20,10 @@ The plugin provides two tools that the LLM can call autonomously:
 
 ### `context-bonsai:prune`
 
-Two-phase tool for archiving conversation history:
+Pattern-based tool for archiving conversation history:
 
-1. **Phase 1** (no arguments): Enables message ID visibility so the LLM can see which messages to prune
-2. **Phase 2** (with `from_id`, `to_id`, `reason`): Archives the specified message range with a summary
+- Call with `from_pattern`, `to_pattern`, `summary`, and `index_terms` (optional `reason`)
+- The tool resolves both patterns to unique message boundaries, then archives that range
 
 Archived messages are replaced with compact placeholders containing the summary and index terms.
 

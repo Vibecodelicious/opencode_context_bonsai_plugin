@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, mock } from 'bun:test'
 import { pruneToolDefinition, createPruneToolDefinition } from './prune'
-import { makeUserMessage, makeAssistantMessage, createAssistantWithAttachments } from './test/fixtures'
-import { clearSessionState } from './state'
+import { makeUserMessage, makeAssistantMessage } from './test/fixtures'
+import { clearSessionState, getIdVisibility, setIdVisibility } from './state'
 import { PLUGIN_ID } from './constants'
 import { createRuntimeCompat, buildRuntimeCompat } from './runtime-compat'
 
@@ -12,7 +12,8 @@ describe('prune tool', () => {
     clearSessionState(sessionID)
   })
 
-  test('phase 1: enables ID visibility', async () => {
+  test('no-arg calls are rejected and do not mutate ID visibility', async () => {
+    setIdVisibility(sessionID, true)
     const mockCtx = {
       sessionID,
       messages: [],
@@ -21,11 +22,12 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({}, mockCtx as any)
-    
-    expect(result).toContain('Message IDs are now visible')
+
+    expect(result).toBe('Phase 2 requires from_pattern and to_pattern (pattern-only mode).')
+    expect(getIdVisibility(sessionID)).toBe(true)
   })
 
-  test('phase 2: validates both IDs required', async () => {
+  test('ID selector mode is explicitly unsupported', async () => {
     const mockCtx = {
       sessionID,
       messages: [],
@@ -34,11 +36,11 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({ from_id: 'msg1' }, mockCtx as any)
-    
-    expect(result).toContain('Phase 2 ID mode requires both from_id and to_id')
+
+    expect(result).toBe('ID selectors are no longer supported; use from_pattern and to_pattern.')
   })
 
-  test('phase 2: rejects mixed selector mode', async () => {
+  test('mixed selector payload returns ID-unsupported error first', async () => {
     const mockCtx = {
       sessionID,
       messages: [],
@@ -55,10 +57,10 @@ describe('prune tool', () => {
       index_terms: ['test', 'selector', 'mixed']
     }, mockCtx as any)
 
-    expect(result).toBe('Phase 2 requires exactly one selector mode: from_id + to_id or from_pattern + to_pattern.')
+    expect(result).toBe('ID selectors are no longer supported; use from_pattern and to_pattern.')
   })
 
-  test('phase 2: validates both patterns required', async () => {
+  test('pattern mode requires both patterns', async () => {
     const mockCtx = {
       sessionID,
       messages: [],
@@ -72,111 +74,7 @@ describe('prune tool', () => {
       index_terms: ['test', 'pattern', 'partial']
     }, mockCtx as any)
 
-    expect(result).toBe('Phase 2 pattern mode requires both from_pattern and to_pattern. Call without arguments to see message IDs.')
-  })
-
-  test('phase 2: validates message IDs exist', async () => {
-    const messages = [
-      makeUserMessage('msg1', sessionID, 'Hello'),
-      makeAssistantMessage('msg2', sessionID, 'Hi there')
-    ]
-
-    const mockCtx = {
-      sessionID,
-      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: null,
-      updateMessage: null
-    }
-
-    const result = await pruneToolDefinition.execute({ 
-      from_id: 'nonexistent', 
-      to_id: 'msg2',
-      summary: 'Test summary',
-      index_terms: ['test']
-    }, mockCtx as any)
-    
-    expect(result).toContain('Cannot resolve synthetic message ID nonexistent to parent')
-  })
-
-  test('validation with synthetic ID resolution succeeds', async () => {
-    const messages = [
-      createAssistantWithAttachments('msg1', sessionID, 1),
-      makeUserMessage('msg2', sessionID, 'Hello')
-    ]
-
-    let updatedMetadata: any = null
-    const mockCtx = {
-      sessionID,
-      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: {},
-      updateMessage: async (id: string, updater: (draft: any) => void) => {
-        const draft = { metadata: {} }
-        updater(draft)
-        if (id === 'msg1') {
-          updatedMetadata = draft.metadata
-        }
-      }
-    }
-
-    // Synthetic wrapper ID that should resolve to msg1
-    const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1_synthetic', 
-      to_id: 'msg1_synthetic2',
-      summary: 'Test synthetic resolution',
-      index_terms: ['test', 'synthetic']
-    }, mockCtx as any)
-    
-    expect(result).toContain('Archived 1 messages')
-    expect(result).toContain('resolved to msg1')
-    expect(updatedMetadata).toBeTruthy()
-    expect(updatedMetadata[PLUGIN_ID].archive.summary).toBe('Test synthetic resolution')
-  })
-
-  test('success message shows resolved IDs when different from original', async () => {
-    const messages = [
-      createAssistantWithAttachments('msg1', sessionID, 1),
-      makeUserMessage('msg2', sessionID, 'Hello')
-    ]
-
-    const mockCtx = {
-      sessionID,
-      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: {},
-      updateMessage: async () => {}
-    }
-
-    const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1_synthetic', 
-      to_id: 'msg1_synthetic2',
-      summary: 'Test message',
-      index_terms: ['test']
-    }, mockCtx as any)
-    
-    expect(result).toContain('msg1_synthetic (resolved to msg1)')
-    expect(result).toContain('msg1_synthetic2 (resolved to msg1)')
-  })
-
-  test('phase 2: validates chronological order', async () => {
-    const messages = [
-      makeUserMessage('msg1', sessionID, 'Hello'),
-      makeAssistantMessage('msg2', sessionID, 'Hi there')
-    ]
-
-    const mockCtx = {
-      sessionID,
-      messages: messages.map(msg => ({ info: { id: msg.id, sessionID: msg.sessionID, role: msg.role, metadata: msg.metadata }, parts: msg.parts })),
-      languageModel: null,
-      updateMessage: null
-    }
-
-    const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg2', 
-      to_id: 'msg1',
-      summary: 'Test summary',
-      index_terms: ['test']
-    }, mockCtx as any)
-    
-    expect(result).toContain('from_id must precede to_id chronologically')
+    expect(result).toBe('Pattern mode requires both from_pattern and to_pattern.')
   })
 
   test('pattern mode resolves from and to boundaries', async () => {
@@ -300,7 +198,7 @@ describe('prune tool', () => {
     expect(result).toContain('from_id must precede to_id chronologically')
   })
 
-  test('phase 2: successful archiving', async () => {
+  test('pattern mode: successful archiving', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there'),
@@ -322,21 +220,22 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1', 
-      to_id: 'msg2',
+      from_pattern: 'Hello',
+      to_pattern: 'Hi there',
       summary: 'User greeted assistant and asked how they are',
       index_terms: ['greeting', 'conversation', 'hello']
     }, mockCtx as any)
     
     expect(result).toContain('Archived 2 messages')
-    expect(result).toContain('msg1 to msg2')
+    expect(result).toContain('pattern "Hello" (resolved to msg1)')
+    expect(result).toContain('pattern "Hi there" (resolved to msg2)')
     expect(updatedMetadata).toBeTruthy()
     expect(updatedMetadata[PLUGIN_ID].archive.summary).toContain('User greeted assistant')
     expect(updatedMetadata[PLUGIN_ID].archive.indexTerms).toEqual(['greeting', 'conversation', 'hello'])
     expect(updatedMetadata[PLUGIN_ID].archive.rangeEnd).toBe('msg2')
   })
 
-  test('phase 2: requires summary parameter', async () => {
+  test('pattern mode: requires summary parameter', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there')
@@ -350,15 +249,15 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1', 
-      to_id: 'msg2',
+      from_pattern: 'Hello',
+      to_pattern: 'Hi there',
       index_terms: ['greeting', 'conversation']
     }, mockCtx as any)
-    
-    expect(result).toContain('Phase 2 requires summary parameter')
+
+    expect(result).toContain('Prune requires summary parameter')
   })
 
-  test('phase 2: requires index_terms parameter', async () => {
+  test('pattern mode: requires index_terms parameter', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there')
@@ -372,15 +271,15 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1', 
-      to_id: 'msg2',
+      from_pattern: 'Hello',
+      to_pattern: 'Hi there',
       summary: 'User greeted assistant'
     }, mockCtx as any)
-    
-    expect(result).toContain('Phase 2 requires index_terms parameter')
+
+    expect(result).toContain('Prune requires index_terms parameter')
   })
 
-  test('phase 2: rejects empty summary', async () => {
+  test('pattern mode: rejects empty summary', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there')
@@ -394,8 +293,8 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1', 
-      to_id: 'msg2',
+      from_pattern: 'Hello',
+      to_pattern: 'Hi there',
       summary: '   ',
       index_terms: ['greeting', 'conversation']
     }, mockCtx as any)
@@ -403,7 +302,7 @@ describe('prune tool', () => {
     expect(result).toContain('summary cannot be empty')
   })
 
-  test('phase 2: rejects empty index_terms array', async () => {
+  test('pattern mode: rejects empty index_terms array', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there')
@@ -417,8 +316,8 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1', 
-      to_id: 'msg2',
+      from_pattern: 'Hello',
+      to_pattern: 'Hi there',
       summary: 'User greeted assistant',
       index_terms: []
     }, mockCtx as any)
@@ -426,7 +325,7 @@ describe('prune tool', () => {
     expect(result).toContain('index_terms cannot be empty')
   })
 
-  test('phase 2: allows single-message range (from_id === to_id)', async () => {
+  test('pattern mode: allows single-message range', async () => {
     const messages = [
       makeUserMessage('msg1', sessionID, 'Hello'),
       makeAssistantMessage('msg2', sessionID, 'Hi there')
@@ -445,14 +344,14 @@ describe('prune tool', () => {
     }
 
     const result = await pruneToolDefinition.execute({ 
-      from_id: 'msg1', 
-      to_id: 'msg1',
+      from_pattern: 'Hello',
+      to_pattern: 'Hello',
       summary: 'User greeting',
       index_terms: ['greeting']
     }, mockCtx as any)
     
     expect(result).toContain('Archived 1 messages')
-    expect(result).toContain('msg1 to msg1')
+    expect(result).toContain('pattern "Hello" (resolved to msg1)')
     expect(updatedMetadata[PLUGIN_ID].archive.rangeEnd).toBe('msg1')
   })
 
@@ -467,8 +366,8 @@ describe('prune tool', () => {
     const messages = [makeUserMessage('msg1', sessionID, 'Hello')]
 
     const result = await compatTool.execute({
-      from_id: 'msg1',
-      to_id: 'msg1',
+      from_pattern: 'Hello',
+      to_pattern: 'Hello',
       summary: 'single message summary',
       index_terms: ['single', 'message', 'summary']
     }, {
@@ -506,8 +405,8 @@ describe('prune tool', () => {
     const messages = [makeUserMessage('msg1', sessionID, 'Hello')]
 
     const result = await compatTool.execute({
-      from_id: 'msg1',
-      to_id: 'msg1',
+      from_pattern: 'Hello',
+      to_pattern: 'Hello',
       summary: 'single message summary',
       index_terms: ['single', 'message', 'summary']
     }, {

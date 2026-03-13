@@ -3,13 +3,11 @@ export const getSystemPromptGuidance = () => `
 
 You have access to context-bonsai-prune and context-bonsai-retrieve tools for managing conversation context.
 
-## Two-Phase Prune Flow
-1. Phase 1: Call context-bonsai-prune with no arguments to see message IDs and gauge visibility
-2. Phase 2: Use pattern selection with summary, index_terms, and optional reason:
-   - Pattern mode: from_pattern + to_pattern
+## Prune Flow
+- Use pattern selection with from_pattern + to_pattern, plus summary, index_terms, and optional reason.
 
 ## Selector Guidance
-- Pattern mode is the primary flow and must resolve to one unique start and end message each.
+- Pattern mode must resolve to one unique start and end message each.
 - Use specific patterns to avoid ambiguity errors.
 
 ## Summary Quality
