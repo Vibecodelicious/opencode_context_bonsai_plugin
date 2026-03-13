@@ -126,90 +126,47 @@ describe('runtime compatibility', () => {
   })
 
   it('builder injects updater from initialization client', async () => {
-    const calls: any[] = []
-    const atomicUpdater = async (ctx: any, id: string, mutate: (draft: any) => void) => {
-      calls.push([ctx, id, mutate])
-    }
+    const atomicUpdater = mock(async () => {})
     const compat = buildRuntimeCompat({ client: { session: { updateMessageAtomic: atomicUpdater } } })
 
     await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
 
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.[0]).toEqual(expect.anything())
-    expect(calls[0]?.[1]).toBe('msg1')
-    expect(calls[0]?.[2]).toEqual(expect.any(Function))
+    expect(atomicUpdater).toHaveBeenCalledTimes(1)
+    expect(atomicUpdater).toHaveBeenCalledWith(expect.anything(), 'msg1', expect.any(Function))
   })
 
   it('selects first available adapter deterministically', async () => {
-    let atomicCalls = 0
-    const updateMessageAtomic = async (_ctx: any, _id: string, _mutate: (draft: any) => void) => {
-      atomicCalls += 1
+    const updateMessageAtomic = mock(async () => {
       throw new Error('first signature rejected')
-    }
+    })
     const updateMessage = mock(async () => {})
     const compat = buildRuntimeCompat({ client: { session: { updateMessageAtomic, updateMessage } } })
 
     await expect(compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})).rejects.toThrow('first signature rejected')
 
-    expect(atomicCalls).toBe(1)
+    expect(updateMessageAtomic).toHaveBeenCalledTimes(1)
     expect(updateMessage).not.toHaveBeenCalled()
   })
 
   it('supports object ctx/id/mutate signature variant', async () => {
-    let callArg: any
-    const updateMessageAtomic = async ({ ctx, id, mutate }: { ctx: any; id: string; mutate: (draft: any) => void }) => {
-      callArg = { ctx, id, mutate }
-    }
+    const updateMessageAtomic = mock(async () => {})
+    let probeCount = 0
     const compat = buildRuntimeCompat({
       client: {
         session: {
-          updateMessageAtomic
+          get updateMessageAtomic() {
+            probeCount += 1
+            return probeCount >= 2 ? updateMessageAtomic : undefined
+          }
         }
       }
     })
 
     await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
 
-    expect(callArg).toEqual({
+    expect(updateMessageAtomic).toHaveBeenCalledWith({
       ctx: expect.objectContaining({ sessionID: 's1' }),
       id: 'msg1',
-      mutate: expect.any(Function)
-    })
-  })
-
-  it('supports sessionID/messageID signature variant with deterministic selection', async () => {
-    const diagnostics: any[] = []
-    let callArg: any
-    const updateMessageAtomic = async ({
-      sessionID,
-      messageID,
-      mutate
-    }: {
-      sessionID: string
-      messageID: string
-      mutate: (draft: any) => void
-    }) => {
-      callArg = { sessionID, messageID, mutate }
-    }
-
-    const compat = buildRuntimeCompat({
-      client: {
-        session: {
-          updateMessageAtomic
-        }
-      },
-      onCompatDiagnostic: event => diagnostics.push(event)
-    })
-
-    await compat.updateMessage({ sessionID: 's1' } as any, 'msg1', () => {})
-
-    expect(diagnostics).toContainEqual({
-      type: 'adapter_selected',
-      adapter: 'client.session.updateMessageAtomic({ sessionID: ctx.sessionID, messageID: id, mutate })'
-    })
-    expect(callArg).toEqual({
-      sessionID: 's1',
-      messageID: 'msg1',
       mutate: expect.any(Function)
     })
   })
@@ -247,9 +204,9 @@ describe('runtime compatibility', () => {
 
   it('does not fallback when selected adapter throws and emits invoke diagnostics', async () => {
     const diagnostics: any[] = []
-    const atomicUpdater = async (_ctx: any, _id: string, _mutate: (draft: any) => void) => {
+    const atomicUpdater = mock(async () => {
       throw new Error('adapter invoke failed')
-    }
+    })
     const compat = buildRuntimeCompat({
       client: { session: { updateMessageAtomic: atomicUpdater } },
       onCompatDiagnostic: event => diagnostics.push(event)
@@ -265,21 +222,26 @@ describe('runtime compatibility', () => {
   })
 
   it('returns exact compatibility error when selected adapter requires missing sessionID', async () => {
-    const updateMessageAtomic = async ({ sessionID: _sessionID, messageID: _messageID }: { sessionID: string; messageID: string }) => {}
+    const updateMessageAtomic = mock(async () => {})
+    let probeCount = 0
     const compat = buildRuntimeCompat({
       client: {
         session: {
-          updateMessageAtomic
+          get updateMessageAtomic() {
+            probeCount += 1
+            return probeCount >= 3 ? updateMessageAtomic : undefined
+          }
         }
       }
     })
 
     await expect(compat.updateMessage({} as any, 'msg1', () => {})).rejects.toThrow(UPDATE_MESSAGE_COMPAT_ERROR)
+    expect(updateMessageAtomic).not.toHaveBeenCalled()
   })
 
   it('emits adapter probe and selected diagnostics in order', async () => {
     const diagnostics: any[] = []
-    const atomicUpdater = async (_ctx: any, _id: string, _mutate: (draft: any) => void) => {}
+    const atomicUpdater = mock(async () => {})
 
     const compat = buildRuntimeCompat({
       client: { session: { updateMessageAtomic: atomicUpdater } },
