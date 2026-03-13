@@ -36,7 +36,6 @@ type ParsedArgs = {
   sessionID: string | null
   contextSize: number
   includeSubagents: boolean
-  callNumber: number | null
 }
 
 type ToolHit = {
@@ -45,27 +44,12 @@ type ToolHit = {
   tool: string
 }
 
-type MessageView = {
-  index: number
-  id: string
-  role: string
-  timeCreated: number
-  parts: any[]
-}
-
-type SessionView = {
-  session: SessionRow
-  messages: MessageView[]
-  hits: ToolHit[]
-}
-
 function parseArgs(argv: string[]): ParsedArgs {
   let showAll = false
   let dbPath = "/home/basil/.local/share/opencode/opencode.db"
   let sessionID: string | null = null
   let contextSize = 2
   let includeSubagents = false
-  let callNumber: number | null = null
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -117,25 +101,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       includeSubagents = true
       continue
     }
-    if (arg.startsWith("--call-number=")) {
-      const parsed = Number.parseInt(arg.slice("--call-number=".length), 10)
-      if (!Number.isNaN(parsed) && parsed > 0) {
-        callNumber = parsed
-      }
-      continue
-    }
-    if (arg === "--call-number") {
-      const value = argv[i + 1]
-      const parsed = value ? Number.parseInt(value, 10) : Number.NaN
-      if (!Number.isNaN(parsed) && parsed > 0) {
-        callNumber = parsed
-        i += 1
-      }
-      continue
-    }
   }
 
-  return { showAll, dbPath, sessionID, contextSize, includeSubagents, callNumber }
+  return { showAll, dbPath, sessionID, contextSize, includeSubagents }
 }
 
 const parsed = parseArgs(process.argv.slice(2))
@@ -144,7 +112,6 @@ const dbPath = parsed.dbPath
 const sessionID = parsed.sessionID
 const contextSize = parsed.contextSize
 const includeSubagents = parsed.includeSubagents
-const callNumber = parsed.callNumber
 
 const db = new Database(dbPath, { readonly: true })
 
@@ -165,60 +132,14 @@ function summarizePart(part: any): string {
   if (type === "tool") {
     const tool = String(part?.tool ?? "unknown")
     const status = String(part?.state?.status ?? "unknown")
-    const rawInput = part?.state?.input
-    let inputText = "<none>"
-    if (rawInput !== undefined) {
-      try {
-        const serialized = JSON.stringify(rawInput)
-        inputText = typeof serialized === "string" && serialized.length > 0 ? serialized : "<none>"
-      } catch {
-        inputText = "<unserializable>"
-      }
-    }
-
-    const rawOutput = part?.state?.output
-    let outputText = "<none>"
-    if (rawOutput !== undefined) {
-      if (typeof rawOutput === "string") {
-        const normalized = rawOutput.replace(/\s+/g, " ").trim()
-        outputText = normalized.length > 0 ? normalized : "<none>"
-      } else {
-        try {
-          const serialized = JSON.stringify(rawOutput)
-          outputText = typeof serialized === "string" && serialized.length > 0 ? serialized : "<none>"
-        } catch {
-          outputText = "<unserializable>"
-        }
-      }
-    }
-
-    const rawError = part?.state?.error
-    let errorText = ""
-    if (rawError !== undefined) {
-      if (typeof rawError === "string") {
-        const normalized = rawError.replace(/\s+/g, " ").trim()
-        errorText = normalized.length > 0 ? normalized : "<empty>"
-      } else {
-        try {
-          const serialized = JSON.stringify(rawError)
-          errorText = typeof serialized === "string" && serialized.length > 0 ? serialized : "<empty>"
-        } catch {
-          errorText = "<unserializable>"
-        }
-      }
-    }
-
-    let extra = ` args=${inputText} output=${outputText}`
-    if (errorText.length > 0) {
-      extra += ` error=${errorText}`
-    }
+    let extra = ""
     if (tool === "context-bonsai-prune") {
       const input = part?.state?.input ?? {}
       const reason = typeof input.reason === "string" ? input.reason.replace(/\s+/g, " ").trim() : ""
       const summary = typeof input.summary === "string" ? input.summary.replace(/\s+/g, " ").trim() : ""
       const reasonText = reason.length > 0 ? reason : "<none>"
       const summaryText = summary.length > 0 ? summary : "<none>"
-      extra += ` reason=${reasonText} summary=${summaryText}`
+      extra = ` reason=${reasonText} summary=${summaryText}`
     }
     return `tool: ${tool} (${status})${extra}`
   }
@@ -232,7 +153,7 @@ function summarizePart(part: any): string {
   return String(type ?? "unknown")
 }
 
-function buildSessionView(dbConn: Database, id: string): SessionView | null {
+function reportSessionContext(dbConn: Database, id: string, context: number): void {
   const session = dbConn
     .query<SessionRow, [string]>(
       `SELECT id, parent_id, title, directory, time_created, time_updated
@@ -242,7 +163,8 @@ function buildSessionView(dbConn: Database, id: string): SessionView | null {
     .get(id)
 
   if (!session) {
-    return null
+    console.log(`Session not found: ${id}`)
+    return
   }
 
   const messages = dbConn
@@ -272,7 +194,7 @@ function buildSessionView(dbConn: Database, id: string): SessionView | null {
     partsByMessage.set(row.message_id, existing)
   }
 
-  const messageView: MessageView[] = messages.map((row, index) => {
+  const messageView = messages.map((row, index) => {
     const parsedMessage = parseJSON<any>(row.data)
     const role = String(parsedMessage?.role ?? "unknown")
     const messageParts = partsByMessage.get(row.id) ?? []
@@ -289,17 +211,6 @@ function buildSessionView(dbConn: Database, id: string): SessionView | null {
       toolHits.push({ messageIndex: message.index, partIndex: i, tool })
     }
   }
-
-  return { session, messages: messageView, hits: toolHits }
-}
-
-function reportSessionContext(dbConn: Database, id: string, context: number): void {
-  const view = buildSessionView(dbConn, id)
-  if (!view) {
-    console.log(`Session not found: ${id}`)
-    return
-  }
-  const { session, messages: messageView, hits: toolHits } = view
 
   console.log(`session=${session.id} | title=${session.title} | messages=${messageView.length} | bonsai_calls=${toolHits.length} | context=${context}`)
 
@@ -325,27 +236,6 @@ function reportSessionContext(dbConn: Database, id: string, context: number): vo
         console.log(`    - ... ${message.parts.length - 4} more parts`)
       }
     }
-  }
-}
-
-function parsePruneRange(output: string): { fromID: string; toID: string } | null {
-  const direct = output.match(/from\s+(msg_[A-Za-z0-9]+)\s+to\s+(msg_[A-Za-z0-9]+)/)
-  if (direct) {
-    return { fromID: direct[1], toID: direct[2] }
-  }
-
-  const resolved = output.match(/resolved to\s+(msg_[A-Za-z0-9]+)[\s\S]*resolved to\s+(msg_[A-Za-z0-9]+)/)
-  if (resolved) {
-    return { fromID: resolved[1], toID: resolved[2] }
-  }
-
-  return null
-}
-
-function renderMessage(message: MessageView): void {
-  console.log(`[${message.index}] ${message.role} ${message.id}`)
-  for (const part of message.parts) {
-    console.log(`  - ${summarizePart(part)}`)
   }
 }
 
@@ -380,79 +270,6 @@ function collectDescendantSessionIDs(dbConn: Database, rootID: string): string[]
 }
 
 if (sessionID) {
-  if (callNumber !== null) {
-    const descendantIDs = includeSubagents ? collectDescendantSessionIDs(db, sessionID) : []
-    const targetSessionIDs = [sessionID, ...descendantIDs]
-    const callList: Array<{ session: SessionRow; messages: MessageView[]; hit: ToolHit }> = []
-
-    for (const id of targetSessionIDs) {
-      const view = buildSessionView(db, id)
-      if (!view) continue
-      for (const hit of view.hits) {
-        callList.push({ session: view.session, messages: view.messages, hit })
-      }
-    }
-
-    if (callList.length === 0) {
-      console.log("No context-bonsai tool calls found for selected scope.")
-      process.exit(0)
-    }
-
-    if (callNumber > callList.length) {
-      console.log(`Invalid --call-number ${callNumber}; available calls: 1..${callList.length}`)
-      process.exit(1)
-    }
-
-    const selected = callList[callNumber - 1]
-    const selectedPart = selected.messages[selected.hit.messageIndex]?.parts[selected.hit.partIndex]
-    const tool = String(selectedPart?.tool ?? "unknown")
-    const status = String(selectedPart?.state?.status ?? "unknown")
-    console.log(`call=${callNumber}/${callList.length} | session=${selected.session.id} | title=${selected.session.title} | tool=${tool} | status=${status}`)
-
-    if (tool !== "context-bonsai-prune") {
-      console.log("Selected call is not context-bonsai-prune; no pruned message range to display.")
-      process.exit(0)
-    }
-
-    const output = String(selectedPart?.state?.output ?? "")
-    const range = parsePruneRange(output)
-    if (!range) {
-      console.log("Selected prune call does not include an archived message range (likely an ID-visibility/probe call).")
-      const compactOutput = output.replace(/\s+/g, " ").trim()
-      if (compactOutput.length > 0) {
-        console.log(`tool_output=${compactOutput}`)
-      }
-      process.exit(0)
-    }
-
-    const fromRow = db
-      .query<{ id: string; time_created: number }, [string, string]>(
-        `SELECT id, time_created FROM message WHERE session_id = ? AND id = ?`
-      )
-      .get(selected.session.id, range.fromID)
-    const toRow = db
-      .query<{ id: string; time_created: number }, [string, string]>(
-        `SELECT id, time_created FROM message WHERE session_id = ? AND id = ?`
-      )
-      .get(selected.session.id, range.toID)
-
-    if (!fromRow || !toRow) {
-      console.log(`Could not resolve archived range endpoints in session data: from=${range.fromID} to=${range.toID}`)
-      process.exit(1)
-    }
-
-    const startTime = Math.min(fromRow.time_created, toRow.time_created)
-    const endTime = Math.max(fromRow.time_created, toRow.time_created)
-    const prunedMessages = selected.messages.filter(m => m.timeCreated >= startTime && m.timeCreated <= endTime)
-
-    console.log(`range=${range.fromID}..${range.toID} | pruned_messages=${prunedMessages.length}`)
-    for (const message of prunedMessages) {
-      console.log("")
-      renderMessage(message)
-    }
-    process.exit(0)
-  }
-
   reportSessionContext(db, sessionID, contextSize)
 
   if (includeSubagents) {

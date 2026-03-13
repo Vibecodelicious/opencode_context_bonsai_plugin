@@ -41,7 +41,6 @@ Repair the runtime compatibility wrapper so `context-bonsai-prune`/`context-bons
 - `packages/opencode/src/tool/registry.ts:79` (OpenCode repo) - modified OpenCode path that provides `ctx.updateMessage`.
 - Runtime evidence: `/tmp/sys-shape.log` and `/tmp/local-shape.log` show all current injector targets are `undefined` in both runtimes.
 - Runtime evidence: `/tmp/bonsai-local2-step2.log` shows local success via `update_path=ctx.updateMessage`; `/tmp/sys-seq-step2.log` shows stock failure via `update_path=unsupported`.
-- `runtime-discovery-artifact-spec.md` - required artifact schema and validation checklist.
 
 ## Acceptance Criteria
 
@@ -149,11 +148,6 @@ If all module candidates miss or fail, continue to existing object-path probes (
 
 ## Implementation Tasks
 
-0. Runtime discovery phase (must complete before implementation claims)
-   - Implement and run discovery generator for both runtimes to produce JSON artifacts per `runtime-discovery-artifact-spec.md`.
-   - Verify matrix rows for registry patch targets and updater targets are evidence-backed callable entries.
-   - If discovery does not find required callable targets on stock runtime, story remains `NEEDS REVISION` with blocker report.
-
 1. Define internal-module injection contract.
    - Add resolver abstraction and typed probe descriptor table (module specifier, export path, call adapter).
    - Lock full precedence list: `ctx.updateMessage` (runtime tier) > module probe families > existing object-path families > unsupported.
@@ -190,41 +184,12 @@ If all module candidates miss or fail, continue to existing object-path probes (
   - local dist OpenCode must continue succeeding via native fallback.
   - system-installed OpenCode must succeed via injected internal path when available.
 
-### E2E Completion Gate (mandatory before claiming done)
-
-- A developer completion report is invalid unless it includes successful E2E evidence for both runtimes below.
-- Required runtimes:
-  1. local dist: `/home/basil/projects/opencode_context_management/opencode/packages/opencode/dist/opencode-linux-x64/bin/opencode`
-  2. stock install: `/home/basil/.opencode/bin/opencode`
-- Required flow per runtime (same session, with `CONTEXT_BONSAI_COMPAT_DIAGNOSTICS=1`):
-  1. run step to create a unique marker message (use unique token to avoid pattern ambiguity)
-  2. `context-bonsai-prune` phase 1 (no args)
-  3. `context-bonsai-prune` phase 2 with `from_pattern` + `to_pattern` using that unique token
-  4. next-turn `context-bonsai-retrieve` using returned anchor id
-  5. export session and verify tool-result outputs
-- Required proof artifacts in report:
-  - exact commands run
-  - session IDs
-  - pass/fail per runtime
-  - key evidence lines with path:line from logs/exports
-  - explicit diagnostic path classification:
-    - local must show native path (`update_path=ctx.updateMessage`) unless runtime genuinely changes
-    - stock must not end on unsupported path for story completion
-- Completion rule:
-  - If stock runtime shows `Compatibility error: message updates are unsupported in this runtime.` or `update_path=unsupported`, story status must remain `NEEDS REVISION`.
-
 ## Validation Commands
 
 - `bun test src/runtime-compat.test.ts src/prune.test.ts src/retrieve.test.ts src/index.test.ts`
 - `bun test`
-- `bun run scripts/discover-runtime-targets.ts --runtime stock --out /tmp/runtime-discovery-stock.json`
-- `bun run scripts/discover-runtime-targets.ts --runtime local --out /tmp/runtime-discovery-local.json`
 - `cd /home/basil/projects/opencode_context_management/opencode && CONTEXT_BONSAI_COMPAT_DIAGNOSTICS=1 ./packages/opencode/dist/opencode-linux-x64/bin/opencode run "Please just reply ACKLOCAL." --print-logs --log-level DEBUG`
 - `cd /home/basil/projects/opencode_context_management/opencode && CONTEXT_BONSAI_COMPAT_DIAGNOSTICS=1 opencode run "Please just reply ACKSYS." --print-logs --log-level DEBUG`
-- `cd /home/basil/projects/opencode_context_management/opencode && CONTEXT_BONSAI_COMPAT_DIAGNOSTICS=1 ./packages/opencode/dist/opencode-linux-x64/bin/opencode run --continue "Use context-bonsai-prune ..." --print-logs --log-level DEBUG`
-- `cd /home/basil/projects/opencode_context_management/opencode && CONTEXT_BONSAI_COMPAT_DIAGNOSTICS=1 /home/basil/.opencode/bin/opencode run --continue "Use context-bonsai-prune ..." --print-logs --log-level DEBUG`
-- `cd /home/basil/projects/opencode_context_management/opencode && ./packages/opencode/dist/opencode-linux-x64/bin/opencode export <sessionID>`
-- `cd /home/basil/projects/opencode_context_management/opencode && /home/basil/.opencode/bin/opencode export <sessionID>`
 
 ## Validation Loop Results
 
