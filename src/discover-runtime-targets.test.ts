@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -123,6 +123,60 @@ describe('discover-runtime-targets script helpers', () => {
     const hashA = computeReproducibilityHash(base)
     const hashB = computeReproducibilityHash(JSON.parse(JSON.stringify(base)))
     expect(hashA).toBe(hashB)
+  })
+
+  it('sanitizes runtime command output from reproducibility hash input', () => {
+    const base = {
+      schemaVersion: '2' as const,
+      inspectionCommands: ['file /tmp/runtime', 'timeout 120s env CONTEXT_BONSAI_DISCOVERY_DUMP=1 /tmp/runtime run ...'],
+      inspectionEnvironment: {
+        cwd: '/tmp',
+        runtimeName: 'stock' as const,
+        runtimeBinary: '/tmp/runtime'
+      },
+      inspectionEvidence: [
+        { source: 'command' as const, ref: 'file /tmp/runtime', snippet: 'ELF', order: 1 },
+        {
+          source: 'command' as const,
+          ref: 'timeout 120s env CONTEXT_BONSAI_DISCOVERY_DUMP=1 /tmp/runtime run ...',
+          snippet: 'nondeterministic stdout with ids 123 and timestamps',
+          order: 2
+        }
+      ],
+      runtime: {
+        name: 'stock' as const,
+        binary: '/tmp/runtime',
+        reportedVersion: '1.0.0'
+      },
+      probeMatrixVersion: 'v1' as const,
+      entries: [],
+      negativeControls: [{ specifier: 'bad', exportPath: 'Nope.missing', status: 'module_not_found' as const }],
+      candidateFindings: [],
+      decisionGate: {
+        status: 'DISCOVERY_INCOMPLETE' as const,
+        blockerCodes: ['missing_registry_target' as const, 'missing_updater_target' as const]
+      },
+      summary: {
+        resolvedCount: 0,
+        callableCount: 0,
+        missingCount: 0,
+        invokeFailedCount: 0
+      },
+      diagnostics: [{ level: 'warn' as const, code: 'decision_gate_unmet', message: 'blocked' }]
+    }
+
+    const modified = {
+      ...base,
+      inspectionEvidence: [
+        base.inspectionEvidence[0],
+        {
+          ...base.inspectionEvidence[1],
+          snippet: 'different runtime output from another run'
+        }
+      ]
+    }
+
+    expect(computeReproducibilityHash(base)).toBe(computeReproducibilityHash(modified))
   })
 
   it('marks function exports callable without invoking them', async () => {
@@ -374,12 +428,67 @@ describe('discover-runtime-targets script helpers', () => {
     expect(keys).toContain('updater:none-found')
   })
 
-  it('runs inspection commands from provided discovery cwd', async () => {
+  it('fails with deterministic error when runtime execution exits non-zero', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-cwd-'))
-    const fakeBinary = path.join(root, 'fake-opencode')
-    await Bun.write(fakeBinary, '#!/bin/sh\nexit 0\n')
+    const fakeBinary = path.join(root, 'fake-opencode-fail')
+    await Bun.write(fakeBinary, '#!/bin/sh\nexit 23\n')
+    await chmod(fakeBinary, 0o755)
 
-    const inspection = await collectInspectionData('local', 'fake-opencode', root)
+    await expect(collectInspectionData('local', fakeBinary, root)).rejects.toThrow('runtime_acquisition_exec_failed:23')
+  })
+
+  it('fails with deterministic error when runtime dump parsing fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-runtime-parse-'))
+    const fakeBinary = path.join(root, 'fake-opencode-parse')
+    await Bun.write(
+      fakeBinary,
+      [
+        '#!/bin/sh',
+        'printf "not-json" > "$CONTEXT_BONSAI_DISCOVERY_OUT"',
+        'exit 0'
+      ].join('\n') + '\n'
+    )
+    await chmod(fakeBinary, 0o755)
+
+    await expect(collectInspectionData('local', fakeBinary, root)).rejects.toThrow('runtime_acquisition_dump_parse_failed')
+  })
+
+  it('fails with deterministic error when required roots are missing', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-runtime-roots-'))
+    const fakeBinary = path.join(root, 'fake-opencode-roots')
+    await Bun.write(
+      fakeBinary,
+      [
+        '#!/bin/sh',
+        'cat > "$CONTEXT_BONSAI_DISCOVERY_OUT" <<\'JSON\'',
+        '{"schemaVersion":"1","roots":{"toolExecuteContext":{"capturedAt":"2026-03-12T00:00:00.000Z","visitedNodes":1,"truncated":false,"hits":[{"path":"tool.registry.fromPlugin","kind":"function"}]}}}',
+        'JSON',
+        'exit 0'
+      ].join('\n') + '\n'
+    )
+    await chmod(fakeBinary, 0o755)
+
+    await expect(collectInspectionData('local', fakeBinary, root)).rejects.toThrow(
+      'runtime_acquisition_required_roots_missing:pluginInitInput,pluginInitClient'
+    )
+  })
+
+  it('runs inspection commands from provided discovery cwd when runtime dump is valid', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'bonsai-discovery-cwd-'))
+    const fakeBinary = path.join(root, 'fake-opencode-ok')
+    await Bun.write(
+      fakeBinary,
+      [
+        '#!/bin/sh',
+        'cat > "$CONTEXT_BONSAI_DISCOVERY_OUT" <<\'JSON\'',
+        '{"schemaVersion":"1","roots":{"pluginInitInput":{"capturedAt":"2026-03-12T00:00:00.000Z","visitedNodes":1,"truncated":false,"hits":[]},"pluginInitClient":{"capturedAt":"2026-03-12T00:00:00.000Z","visitedNodes":1,"truncated":false,"hits":[]},"toolExecuteContext":{"capturedAt":"2026-03-12T00:00:00.000Z","visitedNodes":3,"truncated":false,"hits":[{"path":"tool.registry.fromPlugin","kind":"function"}]}}}',
+        'JSON',
+        'exit 0'
+      ].join('\n') + '\n'
+    )
+    await chmod(fakeBinary, 0o755)
+
+    const inspection = await collectInspectionData('local', fakeBinary, root)
     expect(inspection.inspectionEvidence[0]?.source).toBe('command')
     expect(inspection.inspectionEvidence[0]?.snippet).not.toContain('No such file or directory')
     expect(inspection.inspectionCommands[2]).toContain('CONTEXT_BONSAI_DISCOVERY_DUMP=1')

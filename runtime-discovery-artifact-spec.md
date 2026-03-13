@@ -23,7 +23,7 @@ Provide machine-verifiable evidence for internal module targets used by compatib
 {
   "schemaVersion": "2",
   "generatedAt": "ISO-8601",
-  "reproducibilityHash": "sha256-hex (generatedAt excluded)",
+  "reproducibilityHash": "sha256-hex (generatedAt and runtime-exec output snippets excluded/sanitized)",
   "inspectionCommands": ["ordered command list used for bundle inspection"],
   "inspectionEnvironment": {
     "cwd": "absolute-path",
@@ -109,6 +109,7 @@ Provide machine-verifiable evidence for internal module targets used by compatib
 ## Review/Judge Checklist
 
 - Re-run generator command and compare output hash.
+- Confirm runtime-exec command output differences do not change `reproducibilityHash`.
 - Confirm `reportedVersion` is captured from the target runtime.
 - Confirm negative controls fail as expected.
 - Confirm target rows referenced by plan are present and callable.
