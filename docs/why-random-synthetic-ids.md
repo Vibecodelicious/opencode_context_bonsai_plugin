@@ -174,16 +174,18 @@ The LLM can reference the parent assistant message ID to prune both the tool cal
 
 ## Implications for Plugin
 
-The plugin **cannot** reliably prune tool attachments without upstream changes because:
+The plugin can reliably prune tool attachments with plugin-only synthetic-ID resolution because:
 
 1. Synthetic wrapper message IDs change on every render
-2. The plugin has no way to map synthetic wrapper messages to their parent assistant messages
-3. Even if the plugin tracks synthetic wrapper messages, the IDs won't match on the next render
-4. The LLM sees and references the wrapper message ID, but only the parent assistant message ID exists in storage
+2. The plugin resolves synthetic IDs to parent assistant messages at prune time using monotonic ordering and stored-message existence checks
+3. Resolution is recomputed each invocation, so regenerated wrapper IDs do not break pruning
+4. Retrieval restores parent messages and rendering regenerates wrapper messages from stored tool attachments
 
-**Required Upstream Change:**
+Upstream parent-prefixing remains a viable UX enhancement, but it is not required for the current implementation.
 
-Implement parent ID prefixing in `toModelMessage()` when `compactionModeEnabled: true`:
+**Out of Scope for This Story:**
+
+Parent-prefixing in `toModelMessage()` when `compactionModeEnabled: true`:
 
 ```typescript
 if (part.state.attachments?.length) {
@@ -204,12 +206,7 @@ if (part.state.attachments?.length) {
 }
 ```
 
-This is a **minimal change** that:
-- Doesn't alter storage schema
-- Doesn't change ID generation
-- Only affects rendering when compaction mode is enabled
-- Follows the pattern already established in the fork
-- Allows LLM to reference stable parent IDs instead of ephemeral wrapper IDs
+Canonical scope statement: current implementation uses plugin-only synthetic-ID resolution; upstream parent-prefixing work is explicitly out of scope for this story.
 
 ## References
 

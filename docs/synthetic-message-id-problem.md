@@ -153,11 +153,7 @@ Plugins can then track synthetic wrapper messages and map them to their parents 
 
 ## Recommendation
 
-**Option 2** (fork's approach) is the cleanest because:
-- No schema changes needed
-- Works with existing `compactionModeEnabled` flag
-- LLM naturally understands the continuation pattern
-- Plugin can prune by parent ID without tracking synthetic children
+Use plugin-only synthetic-ID resolution as the canonical implementation path in this repository. It resolves synthetic IDs to stored parent messages using monotonic ordering and does not require upstream parent-prefixing.
 
 ## Why Synthetic Messages Use Random IDs
 
@@ -180,14 +176,16 @@ The fork's approach is architecturally correct because it treats synthetic messa
 
 ## Implementation for Plugin
 
-Once upstream implements Option 2, the plugin needs to:
+Current plugin behavior is:
 
 1. When archiving a message with tool parts that have attachments, the LLM will reference the parent assistant message ID
 2. Archive the parent message - the synthetic wrapper messages will naturally disappear from rendering
 3. Include a note in the summary that attachment results were also archived
 4. When retrieving, restore the parent message - the synthetic wrappers will be regenerated automatically with the stored attachment data
 
-The plugin doesn't need to track synthetic wrapper messages separately - it just archives the parent assistant message by ID, and the ephemeral wrappers are handled by the rendering layer.
+The plugin doesn't need to track synthetic wrapper messages separately - it archives the resolved parent assistant message by ID, and ephemeral wrappers are handled by the rendering layer.
+
+Canonical scope statement: current implementation uses plugin-only synthetic-ID resolution; upstream parent-prefixing work is explicitly out of scope for this story.
 
 ## References
 

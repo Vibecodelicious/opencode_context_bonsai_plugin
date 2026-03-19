@@ -334,4 +334,4 @@ async function resolveToStoredMessage(messageId: string): string {
 - We can use ID ordering to find the parent without string matching
 - Resolution happens at prune time, so ID regeneration between phases doesn't matter
 
-**No upstream changes required** for basic functionality, though parent ID prefixing would still improve UX by making the relationship explicit to the LLM.
+**Canonical implementation statement:** current implementation uses plugin-only synthetic-ID resolution. Upstream parent-prefixing may improve UX, but it is explicitly out of scope for this story.
