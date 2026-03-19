@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from "bun:test"
 import { retrieveTool, createRetrieveTool } from "./retrieve"
+import { pruneToolDefinition } from "./prune"
 import { makeArchivedMessage, makeUserMessage } from "./test/fixtures"
 import { setSameStepPrunes } from "./state"
-import { PLUGIN_ID } from "./constants"
+import { ARCHIVE_KEY, PLUGIN_ID } from "./constants"
 import { createRuntimeCompat } from "./runtime-compat"
 
 describe("retrieve tool", () => {
@@ -135,5 +136,39 @@ describe("retrieve tool", () => {
     } as any)
 
     expect(result).toBe("Compatibility error: message updates are unsupported in this runtime.")
+  })
+
+  it("supports prune/retrieve round-trip with canonical archive key", async () => {
+    const msg1 = makeUserMessage("msg1", "test-session", "Hello")
+    const msg2 = makeUserMessage("msg2", "test-session", "Hi there")
+    const pluginMessages = [toPluginMessage(msg1), toPluginMessage(msg2)]
+
+    mockContext.messages = pluginMessages
+    mockContext.updateMessage = async (id: string, fn: any) => {
+      const target = pluginMessages.find(msg => msg.info.id === id)
+      if (!target) {
+        return
+      }
+
+      const draft = { metadata: { ...(target.info.metadata || {}) } }
+      fn(draft)
+      target.info.metadata = draft.metadata
+    }
+
+    const pruneResult = await pruneToolDefinition.execute({
+      from_pattern: "Hello",
+      to_pattern: "Hi there",
+      summary: "round-trip summary",
+      index_terms: ["round-trip", "archive", "retrieve"]
+    }, mockContext as any)
+
+    expect(pruneResult).toContain("Archived 2 messages")
+    expect((pluginMessages[0].info.metadata as any)[ARCHIVE_KEY].archive.rangeEnd).toBe("msg2")
+
+    setSameStepPrunes("test-session", new Set())
+    const retrieveResult = await retrieveTool.execute({ anchor_id: "msg1" }, mockContext)
+
+    expect(retrieveResult).toBe("Restored 2 messages from range msg1 to msg2. Original content is now visible.")
+    expect((pluginMessages[0].info.metadata as any)[ARCHIVE_KEY]).toBeUndefined()
   })
 })

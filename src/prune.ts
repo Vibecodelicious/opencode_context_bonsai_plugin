@@ -1,9 +1,9 @@
 import { tool, type ToolDefinition } from '@opencode-ai/plugin'
 import { setIdVisibility, getSameStepPrunes, setSameStepPrunes } from './state'
-import { PLUGIN_ID } from './constants'
 import type { WithParts } from './test/fixtures'
 import { resolvePatternBoundary } from './prune-pattern'
 import { createRuntimeCompat, isRuntimeCompatError, type RuntimeCompat } from './runtime-compat'
+import { getArchive, setArchiveMetadata } from './schema'
 
 function findMessageIndex(messages: WithParts[], id: string): number | null {
   const index = messages.findIndex(msg => msg.id === id)
@@ -41,9 +41,9 @@ export function resolveToStoredMessage(messages: WithParts[], messageId: string)
   return parent.id
 }
 
-function isInPrunedRange(messages: WithParts[], id: string, pluginID: string): boolean {
+function isInPrunedRange(messages: WithParts[], id: string): boolean {
   for (const msg of messages) {
-    const archive = (msg.metadata[pluginID] as any)?.archive
+    const archive = getArchive(msg)
     if (archive && archive.rangeEnd) {
       const msgIndex = findMessageIndex(messages, id)
       const startIndex = findMessageIndex(messages, msg.id)
@@ -64,8 +64,7 @@ function isInPrunedRange(messages: WithParts[], id: string, pluginID: string): b
 function validatePruneInput(
   messages: WithParts[],
   fromId: string,
-  toId: string,
-  pluginID: string
+  toId: string
 ): { error: string } | { resolvedFromId: string; resolvedToId: string; fromIndex: number; toIndex: number } {
   try {
     const resolvedFromId = resolveToStoredMessage(messages, fromId)
@@ -78,10 +77,10 @@ function validatePruneInput(
       return { error: `from_pattern must resolve to a message that precedes to_pattern chronologically` }
     }
 
-    if (isInPrunedRange(messages, resolvedFromId, pluginID)) {
+    if (isInPrunedRange(messages, resolvedFromId)) {
       return { error: `from_pattern resolved to ${fromId}, which falls within an already-pruned range` }
     }
-    if (isInPrunedRange(messages, resolvedToId, pluginID)) {
+    if (isInPrunedRange(messages, resolvedToId)) {
       return { error: `to_pattern resolved to ${toId}, which falls within an already-pruned range` }
     }
 
@@ -175,7 +174,7 @@ export function createPruneToolDefinition(runtimeCompat: RuntimeCompat): ToolDef
       return error.message
     }
 
-    const result = validatePruneInput(messages, fromId, toId, PLUGIN_ID)
+    const result = validatePruneInput(messages, fromId, toId)
     if ('error' in result) {
       return `Validation error: ${result.error}`
     }
@@ -183,14 +182,11 @@ export function createPruneToolDefinition(runtimeCompat: RuntimeCompat): ToolDef
       // Write archive metadata to the start message
       try {
         await runtimeCompat.updateMessage(ctx, result.resolvedFromId, (draft: any) => {
-          if (!draft.metadata) draft.metadata = {}
-          draft.metadata[PLUGIN_ID] = {
-            archive: {
-              summary: args.summary,
-              indexTerms: args.index_terms,
-              rangeEnd: result.resolvedToId
-            }
-          }
+          setArchiveMetadata(draft, {
+            summary: args.summary,
+            indexTerms: args.index_terms,
+            rangeEnd: result.resolvedToId
+          })
         })
       } catch (error) {
         if (isRuntimeCompatError(error)) {

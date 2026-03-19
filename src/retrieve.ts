@@ -1,7 +1,6 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
-import { getArchive } from "./schema"
+import { clearArchiveMetadata, getArchive } from "./schema"
 import { getSameStepPrunes } from "./state"
-import { PLUGIN_ID } from "./constants"
 import type { WithParts } from "./test/fixtures"
 import { createRuntimeCompat, isRuntimeCompatError, type RuntimeCompat } from "./runtime-compat"
 
@@ -33,7 +32,7 @@ export function createRetrieveTool(runtimeCompat: RuntimeCompat): ToolDefinition
       }
 
       // Check if anchor has archive metadata
-      const archive = getArchive(anchor, PLUGIN_ID)
+      const archive = getArchive(anchor)
       if (!archive) {
         return `Error: No archive found for message ${anchor_id}`
       }
@@ -58,7 +57,7 @@ export function createRetrieveTool(runtimeCompat: RuntimeCompat): ToolDefinition
       // Clear archive metadata
       try {
         await runtimeCompat.updateMessage(ctx, anchor_id, (draft: any) => {
-          delete draft.metadata[PLUGIN_ID]
+          clearArchiveMetadata(draft)
         })
       } catch (error) {
         if (isRuntimeCompatError(error)) {

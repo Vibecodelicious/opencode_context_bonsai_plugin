@@ -1,13 +1,13 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { getSystemPromptGuidance } from "./prompt"
 import { PLUGIN_ID } from "./constants"
-import { transformMessages } from "./transform"
 import { getIdVisibility, clearSameStepPrunes } from "./state"
 import { handleTokenEvent, handleChatParams, injectGauge } from "./gauge"
 import { createRetrieveTool } from "./retrieve"
 import { createPruneToolDefinition } from "./prune"
 import { convertPluginMessages } from "./convert"
 import { buildRuntimeCompat } from "./runtime-compat"
+import { getArchiveFromMetadata } from "./schema"
 
 export const contextBonsai: Plugin = async (input) => {
   const runtimeCompat = buildRuntimeCompat({ client: (input as any).client })
@@ -38,7 +38,7 @@ export const contextBonsai: Plugin = async (input) => {
     for (let i = 0; i < output.messages.length; i++) {
       const msg = output.messages[i]
       const metadata = (msg.info as any).metadata || {}
-      const archive = metadata[PLUGIN_ID]?.archive
+      const archive = getArchiveFromMetadata(metadata)
       if (archive) {
         anchors.push({ index: i, archive })
       }

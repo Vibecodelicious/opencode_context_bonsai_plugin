@@ -54,6 +54,8 @@ If similar patterns repeat, summarize the iteration process and outcomes rather 
 
 // src/constants.ts
 var PLUGIN_ID = "opencode-context-bonsai";
+var ARCHIVE_KEY = "opencode-context-bonsai";
+var LEGACY_ARCHIVE_KEYS = [];
 
 // src/state.ts
 var tokenCache = new Map;
@@ -16450,21 +16452,44 @@ var ArchiveSchema = exports_external2.object({
     rangeEnd: exports_external2.string()
   }).optional()
 });
-function getArchive(msg, pluginID) {
-  try {
-    const parsed = ArchiveSchema.parse(msg.metadata[pluginID]);
-    return parsed.archive || null;
-  } catch {
-    return null;
+function getArchiveKeys() {
+  return [ARCHIVE_KEY, ...LEGACY_ARCHIVE_KEYS];
+}
+function resolveArchiveFromMetadata(metadata, archiveKeys = getArchiveKeys()) {
+  for (const key of archiveKeys) {
+    try {
+      const parsed = ArchiveSchema.parse(metadata?.[key]);
+      if (parsed.archive) {
+        return { archive: parsed.archive, key };
+      }
+    } catch {}
+  }
+  return null;
+}
+function getArchive(msg) {
+  return resolveArchiveFromMetadata(msg.metadata)?.archive ?? null;
+}
+function getArchiveFromMetadata(metadata) {
+  return resolveArchiveFromMetadata(metadata)?.archive ?? null;
+}
+function setArchiveMetadata(draft, archive) {
+  if (!draft.metadata) {
+    draft.metadata = {};
+  }
+  draft.metadata[ARCHIVE_KEY] = { archive };
+}
+function clearArchiveMetadata(draft, archiveKeys = getArchiveKeys()) {
+  if (!draft.metadata) {
+    return;
+  }
+  for (const key of archiveKeys) {
+    delete draft.metadata[key];
   }
 }
 
 // src/runtime-compat.ts
 var LOAD_MESSAGES_COMPAT_ERROR = "Compatibility error: unable to load session messages in this runtime.";
 var UPDATE_MESSAGE_COMPAT_ERROR = "Compatibility error: message updates are unsupported in this runtime.";
-var INJECTED_CONTEXT_MARKER = "__contextBonsaiInjected";
-var INJECTED_CONTEXT_INJECTOR = "__contextBonsaiInjector";
-var INJECTED_CONTEXT_SOURCE = "__contextBonsaiSource";
 function normalizeMessages(messages) {
   return messages.map((msg) => ({
     id: msg.info.id,
@@ -16497,644 +16522,24 @@ function createRuntimeCompat(options) {
       throw new Error(LOAD_MESSAGES_COMPAT_ERROR);
     },
     async updateMessage(ctx, id, mutate) {
-      const contextUpdater = ctx?.updateMessage;
-      if (typeof contextUpdater === "function") {
-        const isInjected = contextUpdater?.[INJECTED_CONTEXT_MARKER] === true;
-        const markerInjector = isInjected ? contextUpdater?.[INJECTED_CONTEXT_INJECTOR] : undefined;
-        const markerSource = isInjected ? contextUpdater?.[INJECTED_CONTEXT_SOURCE] : undefined;
-        if (isInjected) {
-          options?.onCompatDiagnostic?.({
-            type: "update_path",
-            path: "injectedUpdater",
-            injector: typeof markerInjector === "string" ? markerInjector : undefined,
-            source: markerSource === "module" || markerSource === "object-path" ? markerSource : undefined
-          });
-        } else {
-          options?.onCompatDiagnostic?.({ type: "update_path", path: "ctx.updateMessage" });
-        }
-        await contextUpdater(id, mutate);
+      if (ctx?.updateMessage !== undefined) {
+        await ctx.updateMessage(id, mutate);
         return;
       }
       if (injectedUpdater) {
-        options?.onCompatDiagnostic?.({
-          type: "update_path",
-          path: "injectedUpdater",
-          injector: options.injectedUpdaterMeta?.injector,
-          source: options.injectedUpdaterMeta?.source
-        });
         await injectedUpdater(ctx, id, mutate);
         return;
       }
-      options?.onCompatDiagnostic?.({ type: "update_path", path: "unsupported" });
       throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
     }
   };
 }
-function getPathValue(target, path) {
-  return path.split(".").reduce((current, key) => current?.[key], target);
-}
-function locateFunction(runtime, candidatePaths) {
-  for (const path of candidatePaths) {
-    const ownerPath = path.split(".").slice(0, -1).join(".");
-    const key = path.split(".").at(-1);
-    if (!key)
-      continue;
-    const owner = ownerPath === "" ? runtime : getPathValue(runtime, ownerPath);
-    const fn = owner?.[key];
-    if (typeof fn === "function") {
-      return { fn, owner, path };
-    }
-  }
-  return;
-}
-function markInjectedContextUpdater(fn, injector, source) {
-  Object.defineProperty(fn, INJECTED_CONTEXT_MARKER, {
-    value: true,
-    enumerable: false,
-    configurable: false,
-    writable: false
-  });
-  Object.defineProperty(fn, INJECTED_CONTEXT_INJECTOR, {
-    value: injector,
-    enumerable: false,
-    configurable: false,
-    writable: false
-  });
-  Object.defineProperty(fn, INJECTED_CONTEXT_SOURCE, {
-    value: source,
-    enumerable: false,
-    configurable: false,
-    writable: false
-  });
-}
-function isModuleNotFoundError(error45) {
-  if (!(error45 instanceof Error))
-    return false;
-  const anyError = error45;
-  return anyError?.code === "ERR_MODULE_NOT_FOUND" || anyError?.code === "MODULE_NOT_FOUND";
-}
-function normalizeProbeError(classification, error45) {
-  if (error45 instanceof Error) {
-    return `${classification}: ${error45.message}`;
-  }
-  if (error45 !== undefined) {
-    return `${classification}: ${String(error45)}`;
-  }
-  return classification;
-}
-function getModuleRoots(moduleNamespace) {
-  const roots = [];
-  if (moduleNamespace !== undefined) {
-    roots.push(moduleNamespace);
-    if (moduleNamespace?.default !== undefined) {
-      roots.push(moduleNamespace.default);
-    }
-  }
-  return roots;
-}
-function defaultResolveInternal(specifier) {
-  const importer = new Function("target", "return import(target)");
-  return importer(specifier);
-}
-var INJECTOR_CANDIDATES = [
-  {
-    name: "session.updateMessageAtomic bridge injector",
-    candidatePaths: ["internals.session.updateMessageAtomic", "session.updateMessageAtomic"],
-    requiredSymbols: ["updateMessageAtomic", "sessionID", "messageID", "mutate"],
-    injectShape: "Invoke atomic updater with tool-context bridge payload."
-  },
-  {
-    name: "session.updateMessage mutate bridge injector",
-    candidatePaths: ["internals.session.updateMessage", "session.updateMessage"],
-    requiredSymbols: ["updateMessage", "sessionID", "messageID", "mutate"],
-    injectShape: "Invoke updateMessage with mutate bridge payload."
-  },
-  {
-    name: "message-route patch injector",
-    candidatePaths: ["internals.messageRoute.patchUpdateMessage", "messageRoute.patchUpdateMessage"],
-    requiredSymbols: ["patchUpdateMessage", "messageBridge.createMutateBridge"],
-    injectShape: "Patch message-route client using runtime mutate-bridge symbol."
-  }
-];
-var MODULE_INJECTOR_CANDIDATES = [
-  {
-    name: "module:Session.updateMessageAtomic(@opencode-ai/opencode/session)",
-    specifier: "@opencode-ai/opencode/session",
-    exportPath: "Session.updateMessageAtomic",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:Session.updateMessageAtomic(@opencode-ai/opencode/session/index)",
-    specifier: "@opencode-ai/opencode/session/index",
-    exportPath: "Session.updateMessageAtomic",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:Session.updateMessageAtomic(opencode/session)",
-    specifier: "opencode/session",
-    exportPath: "Session.updateMessageAtomic",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:Session.updateMessageAtomic(opencode/session/index)",
-    specifier: "opencode/session/index",
-    exportPath: "Session.updateMessageAtomic",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:Session.updateMessage(@opencode-ai/opencode/session)",
-    specifier: "@opencode-ai/opencode/session",
-    exportPath: "Session.updateMessage",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:Session.updateMessage(@opencode-ai/opencode/session/index)",
-    specifier: "@opencode-ai/opencode/session/index",
-    exportPath: "Session.updateMessage",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:Session.updateMessage(opencode/session)",
-    specifier: "opencode/session",
-    exportPath: "Session.updateMessage",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:Session.updateMessage(opencode/session/index)",
-    specifier: "opencode/session/index",
-    exportPath: "Session.updateMessage",
-    createUpdater: ({ targetFn, targetOwner }) => async (ctx, id, mutate) => {
-      await targetFn.call(targetOwner, { sessionID: ctx.sessionID, messageID: id, mutate, toolContext: ctx });
-    }
-  },
-  {
-    name: "module:MessageRoute.patchUpdateMessage(@opencode-ai/opencode/message-route)",
-    specifier: "@opencode-ai/opencode/message-route",
-    exportPath: "MessageRoute.patchUpdateMessage",
-    bridgePath: "MessageBridge.createMutateBridge",
-    createUpdater: ({ targetFn, targetOwner, bridgeFactory }) => {
-      if (typeof bridgeFactory !== "function") {
-        throw new Error("missing MessageBridge.createMutateBridge");
-      }
-      return async (ctx, id, mutate) => {
-        const mutateBridge = bridgeFactory(mutate);
-        await targetFn.call(targetOwner, {
-          sessionID: ctx.sessionID,
-          messageID: id,
-          mutateBridge,
-          toolContext: ctx
-        });
-      };
-    }
-  },
-  {
-    name: "module:MessageRoute.patchUpdateMessage(opencode/message-route)",
-    specifier: "opencode/message-route",
-    exportPath: "MessageRoute.patchUpdateMessage",
-    bridgePath: "MessageBridge.createMutateBridge",
-    createUpdater: ({ targetFn, targetOwner, bridgeFactory }) => {
-      if (typeof bridgeFactory !== "function") {
-        throw new Error("missing MessageBridge.createMutateBridge");
-      }
-      return async (ctx, id, mutate) => {
-        const mutateBridge = bridgeFactory(mutate);
-        await targetFn.call(targetOwner, {
-          sessionID: ctx.sessionID,
-          messageID: id,
-          mutateBridge,
-          toolContext: ctx
-        });
-      };
-    }
-  }
-];
-var REGISTRY_PATCH_TARGETS = [
-  { specifier: "@opencode-ai/opencode/tool/registry", exportPath: "PluginToolRegistry.fromPlugin" },
-  { specifier: "@opencode-ai/opencode/tool/registry", exportPath: "fromPlugin" },
-  { specifier: "opencode/tool/registry", exportPath: "PluginToolRegistry.fromPlugin" },
-  { specifier: "opencode/tool/registry", exportPath: "fromPlugin" }
-];
-var updateInjectors = [
-  {
-    name: INJECTOR_CANDIDATES[0].name,
-    isAvailable: (runtime) => locateFunction(runtime, INJECTOR_CANDIDATES[0].candidatePaths) !== undefined,
-    inject: (runtime) => {
-      const located = locateFunction(runtime, INJECTOR_CANDIDATES[0].candidatePaths);
-      if (!located) {
-        throw new Error("selected injector target disappeared");
-      }
-      return async (ctx, id, mutate) => {
-        await located.fn.call(located.owner, {
-          sessionID: ctx.sessionID,
-          messageID: id,
-          mutate,
-          toolContext: ctx
-        });
-      };
-    }
-  },
-  {
-    name: INJECTOR_CANDIDATES[1].name,
-    isAvailable: (runtime) => locateFunction(runtime, INJECTOR_CANDIDATES[1].candidatePaths) !== undefined,
-    inject: (runtime) => {
-      const located = locateFunction(runtime, INJECTOR_CANDIDATES[1].candidatePaths);
-      if (!located) {
-        throw new Error("selected injector target disappeared");
-      }
-      return async (ctx, id, mutate) => {
-        await located.fn.call(located.owner, {
-          sessionID: ctx.sessionID,
-          messageID: id,
-          mutate,
-          toolContext: ctx
-        });
-      };
-    }
-  },
-  {
-    name: INJECTOR_CANDIDATES[2].name,
-    isAvailable: (runtime) => {
-      const patchTarget = locateFunction(runtime, INJECTOR_CANDIDATES[2].candidatePaths);
-      const bridgeFactory = getPathValue(runtime, "messageBridge.createMutateBridge");
-      return patchTarget !== undefined && typeof bridgeFactory === "function";
-    },
-    inject: (runtime) => {
-      const patchTarget = locateFunction(runtime, INJECTOR_CANDIDATES[2].candidatePaths);
-      const bridgeFactory = getPathValue(runtime, "messageBridge.createMutateBridge");
-      if (!patchTarget || typeof bridgeFactory !== "function") {
-        throw new Error("selected injector target disappeared");
-      }
-      return async (ctx, id, mutate) => {
-        const mutateBridge = bridgeFactory(mutate);
-        await patchTarget.fn.call(patchTarget.owner, {
-          sessionID: ctx.sessionID,
-          messageID: id,
-          mutateBridge,
-          toolContext: ctx
-        });
-      };
-    }
-  }
-];
-var registryPatchState = {
-  patched: false
-};
-async function selectModuleInjector(input) {
-  const resolveInternal = input.resolveInternal ?? defaultResolveInternal;
-  const moduleCache = new Map;
-  for (const candidate of MODULE_INJECTOR_CANDIDATES) {
-    input.onCompatDiagnostic?.({
-      type: "injector_targets",
-      injector: candidate.name,
-      targets: [{ path: `${candidate.specifier}:${candidate.exportPath}`, kind: "module-probe" }]
-    });
-    let moduleNamespace;
-    if (moduleCache.has(candidate.specifier)) {
-      moduleNamespace = moduleCache.get(candidate.specifier);
-    } else {
-      try {
-        moduleNamespace = await resolveInternal(candidate.specifier);
-        moduleCache.set(candidate.specifier, moduleNamespace);
-      } catch (error45) {
-        const classification = isModuleNotFoundError(error45) ? "module_not_found" : "module_not_found";
-        input.onCompatDiagnostic?.({
-          type: "injector_probe_error",
-          injector: candidate.name,
-          error: normalizeProbeError(classification, error45)
-        });
-        input.onCompatDiagnostic?.({ type: "injector_probe", injector: candidate.name, available: false });
-        continue;
-      }
-    }
-    const roots = getModuleRoots(moduleNamespace);
-    let targetFn;
-    let targetOwner;
-    let bridgeFactory;
-    for (const root of roots) {
-      const located = locateFunction(root, [candidate.exportPath]);
-      if (!located) {
-        continue;
-      }
-      targetFn = located.fn;
-      targetOwner = located.owner;
-      bridgeFactory = candidate.bridgePath ? getPathValue(root, candidate.bridgePath) : undefined;
-      break;
-    }
-    if (!targetFn) {
-      input.onCompatDiagnostic?.({
-        type: "injector_probe_error",
-        injector: candidate.name,
-        error: normalizeProbeError("export_path_missing", `${candidate.specifier}:${candidate.exportPath}`)
-      });
-      input.onCompatDiagnostic?.({ type: "injector_probe", injector: candidate.name, available: false });
-      continue;
-    }
-    let updater;
-    try {
-      updater = candidate.createUpdater({ targetFn, targetOwner, bridgeFactory });
-    } catch (error45) {
-      input.onCompatDiagnostic?.({
-        type: "injector_probe_error",
-        injector: candidate.name,
-        error: normalizeProbeError("adapter_build_failed", error45)
-      });
-      input.onCompatDiagnostic?.({ type: "injector_probe", injector: candidate.name, available: false });
-      continue;
-    }
-    input.onCompatDiagnostic?.({ type: "injector_probe", injector: candidate.name, available: true });
-    input.onCompatDiagnostic?.({ type: "injector_selected", injector: candidate.name });
-    input.onCompatDiagnostic?.({
-      type: "injector_source",
-      injector: candidate.name,
-      source: "module",
-      specifier: candidate.specifier,
-      exportPath: candidate.exportPath
-    });
-    return {
-      name: candidate.name,
-      source: "module",
-      specifier: candidate.specifier,
-      exportPath: candidate.exportPath,
-      updater
-    };
-  }
-  return;
-}
-function selectObjectPathInjector(input) {
-  const onCompatDiagnostic = input.onCompatDiagnostic;
-  for (const injector of updateInjectors) {
-    const candidate = INJECTOR_CANDIDATES.find((item) => item.name === injector.name);
-    if (candidate) {
-      const targets = candidate.candidatePaths.map((path) => {
-        let kind = "undefined";
-        try {
-          const value = getPathValue(input.client, path);
-          kind = value === undefined ? "undefined" : typeof value;
-        } catch (error45) {
-          kind = `throws:${error45 instanceof Error ? error45.message : String(error45)}`;
-        }
-        return { path, kind };
-      });
-      if (candidate.name === INJECTOR_CANDIDATES[2].name) {
-        let bridgeKind = "undefined";
-        try {
-          const bridgeFactory = getPathValue(input.client, "messageBridge.createMutateBridge");
-          bridgeKind = bridgeFactory === undefined ? "undefined" : typeof bridgeFactory;
-        } catch (error45) {
-          bridgeKind = `throws:${error45 instanceof Error ? error45.message : String(error45)}`;
-        }
-        targets.push({
-          path: "messageBridge.createMutateBridge",
-          kind: bridgeKind
-        });
-      }
-      onCompatDiagnostic?.({ type: "injector_targets", injector: injector.name, targets });
-    }
-    let available = false;
-    try {
-      available = injector.isAvailable(input.client);
-    } catch (error45) {
-      onCompatDiagnostic?.({
-        type: "injector_probe_error",
-        injector: injector.name,
-        error: error45 instanceof Error ? error45.message : String(error45)
-      });
-      continue;
-    }
-    onCompatDiagnostic?.({ type: "injector_probe", injector: injector.name, available });
-    if (!available) {
-      continue;
-    }
-    let updater;
-    try {
-      updater = injector.inject(input.client);
-    } catch (error45) {
-      onCompatDiagnostic?.({
-        type: "injector_probe_error",
-        injector: injector.name,
-        error: normalizeProbeError("adapter_build_failed", error45)
-      });
-      continue;
-    }
-    onCompatDiagnostic?.({ type: "injector_selected", injector: injector.name });
-    onCompatDiagnostic?.({ type: "injector_source", injector: injector.name, source: "object-path" });
-    return {
-      name: injector.name,
-      source: "object-path",
-      updater
-    };
-  }
-  return;
-}
-async function patchRegistryFromPlugin(input, selectedInjector, injectedUpdater) {
-  if (!selectedInjector || !injectedUpdater) {
-    return;
-  }
-  if (registryPatchState.patched) {
-    return;
-  }
-  const resolveInternal = input.resolveInternal ?? defaultResolveInternal;
-  for (const target of REGISTRY_PATCH_TARGETS) {
-    let registryNamespace;
-    try {
-      registryNamespace = await resolveInternal(target.specifier);
-    } catch {
-      continue;
-    }
-    for (const root of getModuleRoots(registryNamespace)) {
-      const located = locateFunction(root, [target.exportPath]);
-      if (!located) {
-        continue;
-      }
-      const original = located.fn;
-      if (original.__contextBonsaiRegistryPatched === true) {
-        registryPatchState.patched = true;
-        registryPatchState.original = original;
-        registryPatchState.target = located.fn;
-        return;
-      }
-      const wrappedFromPlugin = function(...args) {
-        const toolInstance = original.apply(this, args);
-        if (!toolInstance || typeof toolInstance.execute !== "function") {
-          return toolInstance;
-        }
-        if (toolInstance.execute.__contextBonsaiExecutePatched === true) {
-          return toolInstance;
-        }
-        const originalExecute = toolInstance.execute;
-        const wrappedExecute = async function(executeArgs, ctx) {
-          if (ctx && typeof ctx.updateMessage !== "function") {
-            const contextUpdater = async (id, mutate) => {
-              await injectedUpdater(ctx, id, mutate);
-            };
-            markInjectedContextUpdater(contextUpdater, selectedInjector.name, selectedInjector.source);
-            ctx.updateMessage = contextUpdater;
-          }
-          return await originalExecute.call(this, executeArgs, ctx);
-        };
-        Object.defineProperty(wrappedExecute, "__contextBonsaiExecutePatched", {
-          value: true,
-          enumerable: false,
-          configurable: false,
-          writable: false
-        });
-        toolInstance.execute = wrappedExecute;
-        return toolInstance;
-      };
-      Object.defineProperty(wrappedFromPlugin, "__contextBonsaiRegistryPatched", {
-        value: true,
-        enumerable: false,
-        configurable: false,
-        writable: false
-      });
-      located.owner[located.path.split(".").at(-1)] = wrappedFromPlugin;
-      registryPatchState.patched = true;
-      registryPatchState.original = original;
-      registryPatchState.target = wrappedFromPlugin;
-      return;
-    }
-  }
-}
-async function buildRuntimeCompat(input) {
-  const onCompatDiagnostic = input.onCompatDiagnostic;
-  const moduleSelectedInjector = await selectModuleInjector(input);
-  const selectedInjector = moduleSelectedInjector ?? selectObjectPathInjector(input);
-  if (!selectedInjector) {
-    input.onCompatDiagnostic?.({ type: "injector_none_selected" });
-  }
-  const selectedInjectorName = selectedInjector?.name;
-  const selectedInjectedUpdater = selectedInjector?.updater;
-  const injectedUpdater = selectedInjectedUpdater === undefined ? undefined : async (ctx, id, mutate) => {
-    if (typeof ctx?.sessionID !== "string") {
-      throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
-    }
-    if (ctx.sessionID.trim() === "") {
-      throw new Error(UPDATE_MESSAGE_COMPAT_ERROR);
-    }
-    try {
-      await selectedInjectedUpdater(ctx, id, mutate);
-    } catch (error45) {
-      const sourceClassifiedError = normalizeProbeError("adapter_invoke_failed", error45);
-      onCompatDiagnostic?.({
-        type: "injector_invoke_error",
-        injector: selectedInjectorName ?? "unknown injector",
-        error: sourceClassifiedError
-      });
-      throw error45;
-    }
-  };
-  await patchRegistryFromPlugin(input, selectedInjector, injectedUpdater);
-  return createRuntimeCompat({
-    injectedUpdater,
-    injectedUpdaterMeta: selectedInjector ? {
-      injector: selectedInjector.name,
-      source: selectedInjector.source
-    } : undefined,
-    onCompatDiagnostic
-  });
-}
-
-// src/discovery-dump.ts
-import { mkdir, readFile, writeFile } from "fs/promises";
-import path from "path";
-var KEY_FAMILY_RE = /(tool|registry|session|message|update|plugin)/i;
-var MAX_DEPTH = 5;
-var MAX_VISITED = 2000;
-function isDiscoveryEnabled() {
-  const raw = process.env.CONTEXT_BONSAI_DISCOVERY_DUMP;
-  if (!raw)
-    return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-function getOutputPath() {
-  const outputPath = process.env.CONTEXT_BONSAI_DISCOVERY_OUT;
-  if (!outputPath || outputPath.trim() === "") {
-    return null;
-  }
-  return path.resolve(outputPath);
-}
-function summarizeRoot(value) {
-  const visited = new Set;
-  const queue = [{ value, path: "", depth: 0 }];
-  const hits = [];
-  let visitedNodes = 0;
-  let truncated = false;
-  while (queue.length > 0) {
-    const current = queue.shift();
-    visitedNodes += 1;
-    if (visitedNodes > MAX_VISITED) {
-      truncated = true;
-      break;
-    }
-    const node = current.value;
-    if (!node || typeof node !== "object") {
-      continue;
-    }
-    if (visited.has(node)) {
-      continue;
-    }
-    visited.add(node);
-    const keys = Object.keys(node).sort((a, b) => a.localeCompare(b));
-    for (const key of keys) {
-      const child = node[key];
-      const childPath = current.path ? `${current.path}.${key}` : key;
-      const isFamilyHit = KEY_FAMILY_RE.test(key) || KEY_FAMILY_RE.test(childPath);
-      if (isFamilyHit) {
-        hits.push({ path: childPath, kind: typeof child });
-      }
-      if (current.depth < MAX_DEPTH && child && (typeof child === "object" || typeof child === "function")) {
-        queue.push({ value: child, path: childPath, depth: current.depth + 1 });
-      }
-    }
-  }
-  return {
-    capturedAt: new Date().toISOString(),
-    visitedNodes,
-    truncated,
-    hits: hits.slice(0, MAX_VISITED)
-  };
-}
-async function readExistingDocument(filePath) {
-  try {
-    const parsed = JSON.parse(await readFile(filePath, "utf8"));
-    if (parsed && parsed.schemaVersion === "1" && typeof parsed.roots === "object") {
-      return parsed;
-    }
-  } catch {}
-  return {
-    schemaVersion: "1",
-    roots: {}
-  };
-}
-async function captureDiscoveryRoot(label, value) {
-  if (!isDiscoveryEnabled()) {
-    return;
-  }
-  const outPath = getOutputPath();
-  if (!outPath) {
-    return;
-  }
-  const snapshot = summarizeRoot(value);
-  const doc2 = await readExistingDocument(outPath);
-  doc2.roots[label] = snapshot;
-  await mkdir(path.dirname(outPath), { recursive: true });
-  await writeFile(outPath, `${JSON.stringify(doc2, null, 2)}
-`, "utf8");
+function buildRuntimeCompat(input) {
+  const updateMessageAtomic = input.client?.session?.updateMessageAtomic;
+  const injectedUpdater = typeof updateMessageAtomic === "function" ? async (ctx, id, mutate) => {
+    await updateMessageAtomic(ctx, id, mutate);
+  } : undefined;
+  return createRuntimeCompat({ injectedUpdater });
 }
 
 // src/retrieve.ts
@@ -17145,7 +16550,6 @@ function createRetrieveTool(runtimeCompat) {
       anchor_id: tool.schema.string().describe("The ID of the anchor message to restore")
     },
     async execute(args, ctx) {
-      await captureDiscoveryRoot("toolExecuteContext", ctx);
       const { anchor_id } = args;
       let messages;
       try {
@@ -17160,7 +16564,7 @@ function createRetrieveTool(runtimeCompat) {
       if (!anchor) {
         return `Error: Message ${anchor_id} not found`;
       }
-      const archive = getArchive(anchor, PLUGIN_ID);
+      const archive = getArchive(anchor);
       if (!archive) {
         return `Error: No archive found for message ${anchor_id}`;
       }
@@ -17178,7 +16582,7 @@ function createRetrieveTool(runtimeCompat) {
       }
       try {
         await runtimeCompat.updateMessage(ctx, anchor_id, (draft) => {
-          delete draft.metadata[PLUGIN_ID];
+          clearArchiveMetadata(draft);
         });
       } catch (error45) {
         if (isRuntimeCompatError(error45)) {
@@ -17670,9 +17074,9 @@ function resolveToStoredMessage(messages, messageId) {
   }
   return parent.id;
 }
-function isInPrunedRange(messages, id, pluginID) {
+function isInPrunedRange(messages, id) {
   for (const msg of messages) {
-    const archive = msg.metadata[pluginID]?.archive;
+    const archive = getArchive(msg);
     if (archive && archive.rangeEnd) {
       const msgIndex = findMessageIndex(messages, id);
       const startIndex = findMessageIndex(messages, msg.id);
@@ -17688,7 +17092,7 @@ function isInPrunedRange(messages, id, pluginID) {
   }
   return false;
 }
-function validatePruneInput(messages, fromId, toId, pluginID) {
+function validatePruneInput(messages, fromId, toId) {
   try {
     const resolvedFromId = resolveToStoredMessage(messages, fromId);
     const resolvedToId = resolveToStoredMessage(messages, toId);
@@ -17697,10 +17101,10 @@ function validatePruneInput(messages, fromId, toId, pluginID) {
     if (fromIndex > toIndex) {
       return { error: `from_pattern must resolve to a message that precedes to_pattern chronologically` };
     }
-    if (isInPrunedRange(messages, resolvedFromId, pluginID)) {
+    if (isInPrunedRange(messages, resolvedFromId)) {
       return { error: `from_pattern resolved to ${fromId}, which falls within an already-pruned range` };
     }
-    if (isInPrunedRange(messages, resolvedToId, pluginID)) {
+    if (isInPrunedRange(messages, resolvedToId)) {
       return { error: `to_pattern resolved to ${toId}, which falls within an already-pruned range` };
     }
     for (let i = fromIndex;i <= toIndex; i++) {
@@ -17727,7 +17131,6 @@ function createPruneToolDefinition(runtimeCompat) {
       index_terms: tool.schema.array(tool.schema.string()).optional().describe("Keywords for retrieval, 3-8 terms")
     },
     async execute(rawArgs, ctx) {
-      await captureDiscoveryRoot("toolExecuteContext", ctx);
       const args = rawArgs;
       let messages;
       try {
@@ -17777,21 +17180,17 @@ function createPruneToolDefinition(runtimeCompat) {
       } catch (error45) {
         return error45.message;
       }
-      const result = validatePruneInput(messages, fromId, toId, PLUGIN_ID);
+      const result = validatePruneInput(messages, fromId, toId);
       if ("error" in result) {
         return `Validation error: ${result.error}`;
       }
       try {
         await runtimeCompat.updateMessage(ctx, result.resolvedFromId, (draft) => {
-          if (!draft.metadata)
-            draft.metadata = {};
-          draft.metadata[PLUGIN_ID] = {
-            archive: {
-              summary: args.summary,
-              indexTerms: args.index_terms,
-              rangeEnd: result.resolvedToId
-            }
-          };
+          setArchiveMetadata(draft, {
+            summary: args.summary,
+            indexTerms: args.index_terms,
+            rangeEnd: result.resolvedToId
+          });
         });
       } catch (error45) {
         if (isRuntimeCompatError(error45)) {
@@ -17825,22 +17224,8 @@ function convertPluginMessages(messages) {
 }
 
 // src/index.ts
-function isCompatDiagnosticsEnabled() {
-  const raw = process.env.CONTEXT_BONSAI_COMPAT_DIAGNOSTICS;
-  if (!raw)
-    return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
 var contextBonsai = async (input) => {
-  await captureDiscoveryRoot("pluginInitInput", input);
-  await captureDiscoveryRoot("pluginInitClient", input.client);
-  const runtimeCompat = await buildRuntimeCompat({
-    client: input.client,
-    onCompatDiagnostic: isCompatDiagnosticsEnabled() ? (event) => {
-      console.error(`[context-bonsai][compat] ${JSON.stringify(event)}`);
-    } : undefined
-  });
+  const runtimeCompat = buildRuntimeCompat({ client: input.client });
   return {
     tool: {
       "context-bonsai-retrieve": createRetrieveTool(runtimeCompat),
@@ -17861,7 +17246,7 @@ var contextBonsai = async (input) => {
       for (let i = 0;i < output.messages.length; i++) {
         const msg = output.messages[i];
         const metadata = msg.info.metadata || {};
-        const archive = metadata[PLUGIN_ID]?.archive;
+        const archive = getArchiveFromMetadata(metadata);
         if (archive) {
           anchors.push({ index: i, archive });
         }

@@ -1,15 +1,15 @@
 import { describe, it, expect } from "bun:test"
 import { transformMessages } from "./transform"
 import { makeUserMessage, makeAssistantMessage, makeArchivedMessage } from "./test/fixtures"
+import { ARCHIVE_KEY } from "./constants"
 
 describe("transformMessages", () => {
-  const pluginID = "test-plugin"
   const sessionID = "session1"
 
   it("single archive: anchor replaced, followers removed", () => {
     const messages = [
       makeUserMessage("msg1", sessionID, "Hello"),
-      makeArchivedMessage("msg2", sessionID, pluginID, {
+      makeArchivedMessage("msg2", sessionID, ARCHIVE_KEY, {
         summary: "Test summary",
         indexTerms: ["term1", "term2"],
         rangeEnd: "msg4"
@@ -19,7 +19,7 @@ describe("transformMessages", () => {
       makeUserMessage("msg5", sessionID, "After")
     ]
 
-    transformMessages(messages, pluginID, false, sessionID)
+    transformMessages(messages, false, sessionID)
 
     expect(messages).toHaveLength(3)
     expect(messages[0].id).toBe("msg1")
@@ -37,13 +37,13 @@ describe("transformMessages", () => {
 
   it("multiple archives: both rendered correctly", () => {
     const messages = [
-      makeArchivedMessage("msg1", sessionID, pluginID, {
+      makeArchivedMessage("msg1", sessionID, ARCHIVE_KEY, {
         summary: "First summary",
         indexTerms: ["a"],
         rangeEnd: "msg2"
       }),
       makeAssistantMessage("msg2", sessionID, "End1"),
-      makeArchivedMessage("msg3", sessionID, pluginID, {
+      makeArchivedMessage("msg3", sessionID, ARCHIVE_KEY, {
         summary: "Second summary", 
         indexTerms: ["b"],
         rangeEnd: "msg4"
@@ -51,7 +51,7 @@ describe("transformMessages", () => {
       makeAssistantMessage("msg4", sessionID, "End2")
     ]
 
-    transformMessages(messages, pluginID, false, sessionID)
+    transformMessages(messages, false, sessionID)
 
     expect(messages).toHaveLength(2)
     expect(messages[0].parts[0].text).toContain("First summary")
@@ -61,7 +61,7 @@ describe("transformMessages", () => {
   it("missing rangeEnd: anchor-only replacement", () => {
     const messages = [
       makeUserMessage("msg1", sessionID, "Hello"),
-      makeArchivedMessage("msg2", sessionID, pluginID, {
+      makeArchivedMessage("msg2", sessionID, ARCHIVE_KEY, {
         summary: "Test summary",
         indexTerms: ["term1"],
         rangeEnd: "missing"
@@ -69,7 +69,7 @@ describe("transformMessages", () => {
       makeAssistantMessage("msg3", sessionID, "After")
     ]
 
-    transformMessages(messages, pluginID, false, sessionID)
+    transformMessages(messages, false, sessionID)
 
     expect(messages).toHaveLength(3)
     expect(messages[1].parts[0].synthetic).toBe(true)
@@ -79,7 +79,7 @@ describe("transformMessages", () => {
   it("single-message range: anchor replaced, no followers", () => {
     const messages = [
       makeUserMessage("msg1", sessionID, "Hello"),
-      makeArchivedMessage("msg2", sessionID, pluginID, {
+      makeArchivedMessage("msg2", sessionID, ARCHIVE_KEY, {
         summary: "Self range",
         indexTerms: [],
         rangeEnd: "msg2"
@@ -87,7 +87,7 @@ describe("transformMessages", () => {
       makeAssistantMessage("msg3", sessionID, "After")
     ]
 
-    transformMessages(messages, pluginID, false, sessionID)
+    transformMessages(messages, false, sessionID)
 
     expect(messages).toHaveLength(3)
     expect(messages[1].parts[0].synthetic).toBe(true)
@@ -99,7 +99,7 @@ describe("transformMessages", () => {
       makeAssistantMessage("msg2", sessionID, "World")
     ]
 
-    transformMessages(messages, pluginID, true, sessionID)
+    transformMessages(messages, true, sessionID)
 
     expect(messages[0].parts[0].text).toBe("[msg:msg1] Hello")
     expect(messages[1].parts[0].text).toBe("[msg:msg2] World")
@@ -107,14 +107,14 @@ describe("transformMessages", () => {
 
   it("ID prefixing enabled, synthetic-only message: ID part inserted", () => {
     const messages = [
-      makeArchivedMessage("msg1", sessionID, pluginID, {
+      makeArchivedMessage("msg1", sessionID, ARCHIVE_KEY, {
         summary: "Test",
         indexTerms: [],
         rangeEnd: "msg1"
       })
     ]
 
-    transformMessages(messages, pluginID, true, sessionID)
+    transformMessages(messages, true, sessionID)
 
     expect(messages[0].parts).toHaveLength(2)
     expect(messages[0].parts[0].text).toBe("[msg:msg1]")
@@ -127,7 +127,7 @@ describe("transformMessages", () => {
       makeUserMessage("msg1", sessionID, "Hello")
     ]
 
-    transformMessages(messages, pluginID, false, sessionID)
+    transformMessages(messages, false, sessionID)
 
     expect(messages[0].parts[0].text).toBe("Hello")
   })
@@ -138,7 +138,7 @@ describe("transformMessages", () => {
       makeAssistantMessage("msg2", sessionID, "World")
     ]
 
-    transformMessages(messages, pluginID, false, sessionID)
+    transformMessages(messages, false, sessionID)
 
     expect(messages).toHaveLength(2)
     expect(messages[0].parts[0].text).toBe("Hello")
@@ -149,7 +149,7 @@ describe("transformMessages", () => {
     const messages: any[] = []
     
     expect(() => {
-      transformMessages(messages, pluginID, false, sessionID)
+      transformMessages(messages, false, sessionID)
     }).not.toThrow()
     
     expect(messages).toHaveLength(0)

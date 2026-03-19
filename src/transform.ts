@@ -1,11 +1,10 @@
 import type { TextPart } from "@opencode-ai/sdk"
 import type { WithParts } from "./test/fixtures"
-import { hasArchive, getArchive } from "./schema"
-import { clearSameStepPrunes, getIdVisibility } from "./state"
+import { getArchive } from "./schema"
+import { clearSameStepPrunes } from "./state"
 
 export function transformMessages(
   messages: WithParts[],
-  pluginID: string,
   idVisibility: boolean,
   sessionID: string
 ): void {
@@ -19,7 +18,7 @@ export function transformMessages(
   // Find all anchors
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
-    const archive = getArchive(msg, pluginID)
+    const archive = getArchive(msg)
     if (archive) {
       anchors.push({ index: i, msg, archive })
     }

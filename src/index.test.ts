@@ -135,7 +135,7 @@ describe("message conversion", () => {
     }]
 
     const converted = convertPluginMessages(pluginMessages as any)
-    transformMessages(converted, PLUGIN_ID, false, "s1")
+    transformMessages(converted, false, "s1")
     
     expect(converted).toHaveLength(1)
     expect(converted[0].parts).toHaveLength(1)

@@ -27,9 +27,18 @@ export declare const ArchiveSchema: z.ZodObject<{
         rangeEnd: string;
     } | undefined;
 }>;
-export declare function getArchive(msg: WithParts, pluginID: string): {
-    summary: string;
-    indexTerms: string[];
-    rangeEnd: string;
+export type ArchiveValue = NonNullable<z.infer<typeof ArchiveSchema>["archive"]>;
+export declare function getArchiveKeys(): string[];
+export declare function resolveArchiveFromMetadata(metadata: Record<string, unknown> | undefined, archiveKeys?: readonly string[]): {
+    archive: ArchiveValue;
+    key: string;
 } | null;
-export declare function hasArchive(msg: WithParts, pluginID: string): boolean;
+export declare function getArchive(msg: WithParts): ArchiveValue | null;
+export declare function hasArchive(msg: WithParts): boolean;
+export declare function getArchiveFromMetadata(metadata: Record<string, unknown> | undefined): ArchiveValue | null;
+export declare function setArchiveMetadata(draft: {
+    metadata?: Record<string, unknown>;
+}, archive: ArchiveValue): void;
+export declare function clearArchiveMetadata(draft: {
+    metadata?: Record<string, unknown>;
+}, archiveKeys?: readonly string[]): void;
