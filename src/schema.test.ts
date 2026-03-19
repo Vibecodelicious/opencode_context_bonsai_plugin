@@ -108,5 +108,6 @@ describe("schema", () => {
 
   it("keeps explicit legacy key inventory empty until evidence exists", () => {
     expect(LEGACY_ARCHIVE_KEYS).toEqual([])
+    expect(Object.isFrozen(LEGACY_ARCHIVE_KEYS)).toBe(true)
   })
 })
