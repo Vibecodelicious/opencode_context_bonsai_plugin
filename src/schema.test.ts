@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test"
-import { ARCHIVE_KEY, LEGACY_ARCHIVE_KEYS } from "./constants"
+import { ARCHIVE_KEY } from "./constants"
 import { clearArchiveMetadata, getArchive, hasArchive, resolveArchiveFromMetadata } from "./schema"
 import { makeArchivedMessage, makeUserMessage } from "./test/fixtures"
 
@@ -47,9 +47,8 @@ describe("schema", () => {
     expect(hasArchive(msg)).toBe(false)
   })
 
-  it("resolveArchiveFromMetadata supports legacy-only and mixed precedence", () => {
+  it("resolveArchiveFromMetadata ignores legacy-only metadata", () => {
     const legacyKey = "legacy-context-bonsai"
-    const archiveKeys = [ARCHIVE_KEY, legacyKey]
 
     const legacyOnly = {
       [legacyKey]: {
@@ -61,35 +60,11 @@ describe("schema", () => {
       }
     }
 
-    const mixed = {
-      [ARCHIVE_KEY]: {
-        archive: {
-          summary: "canonical",
-          indexTerms: ["canonical"],
-          rangeEnd: "msg3"
-        }
-      },
-      [legacyKey]: {
-        archive: {
-          summary: "legacy",
-          indexTerms: ["legacy"],
-          rangeEnd: "msg2"
-        }
-      }
-    }
-
-    const legacyResolved = resolveArchiveFromMetadata(legacyOnly, archiveKeys)
-    expect(legacyResolved).toBeTruthy()
-    expect(legacyResolved!.key).toBe(legacyKey)
-    expect(legacyResolved!.archive.summary).toBe("legacy")
-
-    const mixedResolved = resolveArchiveFromMetadata(mixed, archiveKeys)
-    expect(mixedResolved).toBeTruthy()
-    expect(mixedResolved!.key).toBe(ARCHIVE_KEY)
-    expect(mixedResolved!.archive.summary).toBe("canonical")
+    const legacyResolved = resolveArchiveFromMetadata(legacyOnly)
+    expect(legacyResolved).toBeNull()
   })
 
-  it("clearArchiveMetadata clears canonical and provided legacy keys", () => {
+  it("clearArchiveMetadata clears canonical key only", () => {
     const legacyKey = "legacy-context-bonsai"
     const draft = {
       metadata: {
@@ -99,15 +74,10 @@ describe("schema", () => {
       }
     }
 
-    clearArchiveMetadata(draft, [ARCHIVE_KEY, legacyKey])
+    clearArchiveMetadata(draft)
 
     expect(draft.metadata[ARCHIVE_KEY]).toBeUndefined()
-    expect(draft.metadata[legacyKey]).toBeUndefined()
+    expect(draft.metadata[legacyKey]).toEqual({ archive: { summary: "legacy", indexTerms: [], rangeEnd: "msg2" } })
     expect(draft.metadata.unrelated).toEqual({ keep: true })
-  })
-
-  it("keeps explicit legacy key inventory empty until evidence exists", () => {
-    expect(LEGACY_ARCHIVE_KEYS).toEqual([])
-    expect(Object.isFrozen(LEGACY_ARCHIVE_KEYS)).toBe(true)
   })
 })

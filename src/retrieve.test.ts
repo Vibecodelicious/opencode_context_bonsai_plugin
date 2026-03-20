@@ -57,6 +57,19 @@ describe("retrieve tool", () => {
     expect(result).toBe("Error: No archive found for message msg1")
   })
 
+  it("treats legacy-only archive metadata as no archive", async () => {
+    const legacyArchived = makeArchivedMessage("msg1", "test-session", "legacy-context-bonsai", {
+      summary: "legacy summary",
+      indexTerms: ["legacy"],
+      rangeEnd: "msg2"
+    })
+    mockContext.messages = [toPluginMessage(legacyArchived)]
+
+    const result = await retrieveTool.execute({ anchor_id: "msg1" }, mockContext)
+
+    expect(result).toBe("Error: No archive found for message msg1")
+  })
+
   it("should return error for same-step prune", async () => {
     const archived = makeArchivedMessage("msg1", "test-session", PLUGIN_ID, {
       summary: "Test summary",

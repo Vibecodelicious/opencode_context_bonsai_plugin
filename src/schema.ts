@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { ARCHIVE_KEY, LEGACY_ARCHIVE_KEYS } from "./constants"
+import { ARCHIVE_KEY } from "./constants"
 import type { WithParts } from "./test/fixtures"
 
 export const ArchiveSchema = z.object({
@@ -12,23 +12,16 @@ export const ArchiveSchema = z.object({
 
 export type ArchiveValue = NonNullable<z.infer<typeof ArchiveSchema>["archive"]>
 
-export function getArchiveKeys(): string[] {
-  return [ARCHIVE_KEY, ...LEGACY_ARCHIVE_KEYS]
-}
-
 export function resolveArchiveFromMetadata(
-  metadata: Record<string, unknown> | undefined,
-  archiveKeys: readonly string[] = getArchiveKeys()
+  metadata: Record<string, unknown> | undefined
 ): { archive: ArchiveValue; key: string } | null {
-  for (const key of archiveKeys) {
-    try {
-      const parsed = ArchiveSchema.parse(metadata?.[key])
-      if (parsed.archive) {
-        return { archive: parsed.archive, key }
-      }
-    } catch {
-      // Continue scanning configured keys.
+  try {
+    const parsed = ArchiveSchema.parse(metadata?.[ARCHIVE_KEY])
+    if (parsed.archive) {
+      return { archive: parsed.archive, key: ARCHIVE_KEY }
     }
+  } catch {
+    // Ignore invalid archive metadata and treat as non-archive state.
   }
 
   return null
@@ -55,14 +48,11 @@ export function setArchiveMetadata(draft: { metadata?: Record<string, unknown> }
 }
 
 export function clearArchiveMetadata(
-  draft: { metadata?: Record<string, unknown> },
-  archiveKeys: readonly string[] = getArchiveKeys()
+  draft: { metadata?: Record<string, unknown> }
 ): void {
   if (!draft.metadata) {
     return
   }
 
-  for (const key of archiveKeys) {
-    delete draft.metadata[key]
-  }
+  delete draft.metadata[ARCHIVE_KEY]
 }
