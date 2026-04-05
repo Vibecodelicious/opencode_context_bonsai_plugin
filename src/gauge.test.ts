@@ -24,10 +24,31 @@ describe("gauge", () => {
         }
       }
 
-      handleTokenEvent(event)
+      handleTokenEvent(event as any)
       
       const cached = getTokenCache(sessionID)
       expect(cached).toEqual({ totalTokens: 150 })
+    })
+
+    test("falls back to structured token fields when total is absent", () => {
+      const event = {
+        type: "message.updated" as const,
+        properties: {
+          info: {
+            sessionID,
+            role: "assistant" as const,
+            tokens: {
+              input: 100,
+              output: 50,
+              cache: { write: 7 }
+            }
+          }
+        }
+      }
+
+      handleTokenEvent(event as any)
+
+      expect(getTokenCache(sessionID)).toEqual({ totalTokens: 157 })
     })
 
     test("ignores non-message.updated events", () => {
@@ -53,7 +74,7 @@ describe("gauge", () => {
         }
       }
 
-      handleTokenEvent(event)
+      handleTokenEvent(event as any)
       
       expect(getTokenCache(sessionID)).toBeNull()
     })
@@ -70,27 +91,40 @@ describe("gauge", () => {
         }
       }
 
-      handleTokenEvent(event)
+      handleTokenEvent(event as any)
       
       expect(getTokenCache(sessionID)).toBeNull()
     })
   })
 
   describe("handleChatParams", () => {
-    test("caches model.limit.input when available", () => {
-      const model = { limit: { input: 4000, context: 8000 } }
-      
+    test("caches input path and reserves output semantics when input exists", () => {
+      const model = { limit: { input: 48000, context: 128000, output: 64000 } }
+
       handleChatParams(sessionID, model)
-      
-      expect(getModelLimitCache(sessionID)).toBe(4000)
+
+      expect(getModelLimitCache(sessionID)).toEqual({
+        input: 48000,
+        context: 128000,
+        maxOutputTokens: 32000
+      })
     })
 
-    test("falls back to model.limit.context", () => {
-      const model = { limit: { context: 8000 } }
-      
+    test("falls back to context path when input is absent", () => {
+      const model = { limit: { context: 8000, output: 5000 } }
+
       handleChatParams(sessionID, model)
-      
-      expect(getModelLimitCache(sessionID)).toBe(8000)
+
+      expect(getModelLimitCache(sessionID)).toEqual({
+        context: 8000,
+        maxOutputTokens: 5000
+      })
+    })
+
+    test("clears cache when both input and context are missing", () => {
+      handleChatParams(sessionID, { limit: { output: 4000 } })
+
+      expect(getModelLimitCache(sessionID)).toBeNull()
     })
   })
 
@@ -121,7 +155,7 @@ describe("gauge", () => {
         type: "message.updated",
         properties: { info: { sessionID, role: "assistant", tokens: { input: 100 } } }
       } as any)
-      handleChatParams(sessionID, { limit: { context: 4000 } })
+      handleChatParams(sessionID, { limit: { context: 50000 } })
 
       // First 4 calls should not inject
       for (let i = 0; i < 4; i++) {
@@ -132,7 +166,7 @@ describe("gauge", () => {
       // 5th call should inject
       injectGauge(messages, sessionID, pluginID)
       expect(messages[0].parts).toHaveLength(2)
-      expect(messages[0].parts[1].text).toContain("[CONTEXT GAUGE:")
+      expect((messages[0].parts[1] as any).text).toContain("[CONTEXT GAUGE:")
     })
 
     test("injects gauge with correct format", () => {
@@ -141,17 +175,49 @@ describe("gauge", () => {
         type: "message.updated",
         properties: { info: { sessionID, role: "assistant", tokens: { input: 100 } } }
       } as any)
-      handleChatParams(sessionID, { limit: { context: 4000 } })
+      handleChatParams(sessionID, { limit: { context: 50000 } })
 
       // Skip to 5th turn
       for (let i = 0; i < 5; i++) {
         injectGauge(messages, sessionID, pluginID)
       }
 
-      const gaugePart = messages[0].parts[1]
+      const gaugePart = messages[0].parts[1] as any
       expect(gaugePart.synthetic).toBe(true)
-      expect(gaugePart.text).toContain("[CONTEXT GAUGE: 130 / 4000 tokens (3%)]")
+      expect(gaugePart.text).toContain("[CONTEXT GAUGE: 130 / 18000 tokens (1%)]")
       expect(gaugePart.text).toContain("continue your work")
+    })
+
+    test("uses input limit path with reserved headroom", () => {
+      const messages = [makeUserMessage("msg1", sessionID, "Hello")]
+      handleTokenEvent({
+        type: "message.updated",
+        properties: { info: { sessionID, role: "assistant", tokens: { input: 100 } } }
+      } as any)
+      handleChatParams(sessionID, { limit: { input: 25000, context: 90000, output: 16000 } })
+
+      for (let i = 0; i < 5; i++) {
+        injectGauge(messages, sessionID, pluginID)
+      }
+
+      const gaugePart = messages[0].parts[1] as any
+      expect(gaugePart.text).toContain("[CONTEXT GAUGE: 130 / 9000 tokens (1%)]")
+    })
+
+    test("skips injection when usable budget is zero or negative", () => {
+      const messages = [makeUserMessage("msg1", sessionID, "Hello")]
+      handleTokenEvent({
+        type: "message.updated",
+        properties: { info: { sessionID, role: "assistant", tokens: { input: 100 } } }
+      } as any)
+      handleChatParams(sessionID, { limit: { input: 10000, output: 15000 } })
+
+      for (let i = 0; i < 5; i++) {
+        injectGauge(messages, sessionID, pluginID)
+      }
+
+      expect(messages[0].parts).toHaveLength(1)
+      expect(getTurnCount(sessionID)).toBe(5)
     })
 
     test("appends to last user message", () => {
@@ -164,7 +230,7 @@ describe("gauge", () => {
         type: "message.updated",
         properties: { info: { sessionID, role: "assistant", tokens: { input: 100 } } }
       } as any)
-      handleChatParams(sessionID, { limit: { context: 4000 } })
+      handleChatParams(sessionID, { limit: { context: 50000 } })
 
       // Skip to 5th turn
       for (let i = 0; i < 5; i++) {

@@ -53,7 +53,7 @@ describe("state management", () => {
     const sessionID = "cleanup-test"
     
     setTokenCache(sessionID, {totalTokens: 150})
-    setModelLimitCache(sessionID, 1000)
+    setModelLimitCache(sessionID, { context: 1000, maxOutputTokens: 32000 })
     setIdVisibility(sessionID, true)
     setSameStepPrunes(sessionID, new Set(["id1"]))
     setTurnCount(sessionID, 5)

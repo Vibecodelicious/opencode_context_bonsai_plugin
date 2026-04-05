@@ -6,11 +6,29 @@ import { getTokenCache, setTokenCache, getModelLimitCache, setModelLimitCache, g
 
 const GAUGE_CADENCE = 5 // Show gauge every N turns
 const GAUGE_TOKEN_OVERHEAD = 30 // Approximate tokens for gauge message
+const MAX_OUTPUT_TOKENS_FALLBACK = 32000
+const RESERVED_HEADROOM_MAX = 20000
 
-function sumTokens(obj: any): number {
-  if (typeof obj === 'number') return obj
-  if (typeof obj !== 'object' || obj === null) return 0
-  return Object.values(obj).reduce((sum: number, val) => sum + sumTokens(val), 0)
+function getCompactionAlignedTokenCount(tokens: AssistantMessage["tokens"]): number {
+  const input = tokens?.input ?? 0
+  const output = tokens?.output ?? 0
+  const cacheRead = tokens?.cache?.read ?? 0
+  const cacheWrite = tokens?.cache?.write ?? 0
+
+  return tokens?.total || (input + output + cacheRead + cacheWrite)
+}
+
+function getUsableBudget(modelLimit: { input?: number; context?: number; maxOutputTokens: number }): number {
+  if (typeof modelLimit.input === "number") {
+    const reserved = Math.min(RESERVED_HEADROOM_MAX, modelLimit.maxOutputTokens)
+    return modelLimit.input - reserved
+  }
+
+  if (typeof modelLimit.context === "number") {
+    return modelLimit.context - modelLimit.maxOutputTokens
+  }
+
+  return 0
 }
 
 export function handleTokenEvent(event: V1Event): void {
@@ -19,13 +37,9 @@ export function handleTokenEvent(event: V1Event): void {
   if (!event.properties.info.tokens || event.properties.info.tokens.input <= 0) return
 
   const sessionID = event.properties.info.sessionID
-  // Cast to v2 AssistantMessage to access tokens.total field
   const tokens = (event.properties.info as unknown as AssistantMessage).tokens
-  
-  // Use tokens.total if available (v2 SDK types include this field)
-  // Fall back to recursive sum if not present
-  const total = tokens.total ?? sumTokens(tokens)
-  
+  const total = getCompactionAlignedTokenCount(tokens)
+
   setTokenCache(sessionID, { totalTokens: total })
 }
 
@@ -44,10 +58,24 @@ export function formatGaugeText(used: number, modelLimit: number, percent: numbe
 }
 
 export function handleChatParams(sessionID: string, model: any): void {
-  const limit = model.limit?.input || model.limit?.context
-  if (limit) {
-    setModelLimitCache(sessionID, limit)
+  const input = model.limit?.input
+  const context = model.limit?.context
+  const output = model.limit?.output
+  const maxOutputTokens = typeof output === "number"
+    ? Math.min(output, MAX_OUTPUT_TOKENS_FALLBACK)
+    : MAX_OUTPUT_TOKENS_FALLBACK
+
+  if (typeof input === "number") {
+    setModelLimitCache(sessionID, { input, context, maxOutputTokens })
+    return
   }
+
+  if (typeof context === "number") {
+    setModelLimitCache(sessionID, { context, maxOutputTokens })
+    return
+  }
+
+  setModelLimitCache(sessionID, null)
 }
 
 export function injectGauge(messages: WithParts[], sessionID: string, pluginID: string): void {
@@ -73,9 +101,12 @@ export function injectGauge(messages: WithParts[], sessionID: string, pluginID: 
   if (lastUserIndex === -1) return
 
   const used = tokenData.totalTokens + GAUGE_TOKEN_OVERHEAD
-  const percent = Math.round((used / modelLimit) * 100)
-  
-  const gaugeText = `<system-reminder>\n${formatGaugeText(used, modelLimit, percent)}\n</system-reminder>`
+  const usableBudget = getUsableBudget(modelLimit)
+
+  if (usableBudget <= 0) return
+
+  const percent = Math.round((used / usableBudget) * 100)
+  const gaugeText = `<system-reminder>\n${formatGaugeText(used, usableBudget, percent)}\n</system-reminder>`
   
   const gaugePart: TextPart = {
     id: `gauge-${sessionID}-${currentTurn + 1}`,
