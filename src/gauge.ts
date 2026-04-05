@@ -34,11 +34,13 @@ function getUsableBudget(modelLimit: { input?: number; context?: number; maxOutp
 export function handleTokenEvent(event: V1Event): void {
   if (event.type !== "message.updated") return
   if (event.properties.info.role !== "assistant") return
-  if (!event.properties.info.tokens || event.properties.info.tokens.input <= 0) return
 
   const sessionID = event.properties.info.sessionID
   const tokens = (event.properties.info as unknown as AssistantMessage).tokens
+  if (!tokens) return
+
   const total = getCompactionAlignedTokenCount(tokens)
+  if (total <= 0) return
 
   setTokenCache(sessionID, { totalTokens: total })
 }

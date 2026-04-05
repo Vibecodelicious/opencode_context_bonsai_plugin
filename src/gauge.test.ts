@@ -79,21 +79,39 @@ describe("gauge", () => {
       expect(getTokenCache(sessionID)).toBeNull()
     })
 
-    test("ignores events with zero input tokens", () => {
+    test("updates cache when input is zero but other token fields are non-zero", () => {
       const event = {
         type: "message.updated" as const,
         properties: {
           info: {
             sessionID,
             role: "assistant" as const,
-            tokens: { input: 0, output: 50 }
+            tokens: { input: 0, output: 50, cache: { write: 4 } }
           }
         }
       }
 
       handleTokenEvent(event as any)
-      
-      expect(getTokenCache(sessionID)).toBeNull()
+
+      expect(getTokenCache(sessionID)).toEqual({ totalTokens: 54 })
+    })
+
+    test("updates cache when total is present and input is zero or missing", () => {
+      handleTokenEvent({
+        type: "message.updated",
+        properties: { info: { sessionID, role: "assistant", tokens: { input: 0, total: 200 } } }
+      } as any)
+
+      expect(getTokenCache(sessionID)).toEqual({ totalTokens: 200 })
+
+      clearSessionState(sessionID)
+
+      handleTokenEvent({
+        type: "message.updated",
+        properties: { info: { sessionID, role: "assistant", tokens: { output: 1, total: 300 } } }
+      } as any)
+
+      expect(getTokenCache(sessionID)).toEqual({ totalTokens: 300 })
     })
   })
 
