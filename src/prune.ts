@@ -102,10 +102,10 @@ function validatePruneInput(
 
 export function createPruneToolDefinition(runtimeCompat: RuntimeCompat): ToolDefinition {
   return tool({
-    description: 'Archive a range of conversation messages with a summary using pattern boundaries.',
+    description: 'Archive one contiguous range of conversation messages with a summary using pattern boundaries. Use this in a single turn after internal ranking; do not output partitions or rankings before prune execution.',
     args: {
-      from_pattern: tool.schema.string().optional().describe('Pattern used to resolve start message ID'),
-      to_pattern: tool.schema.string().optional().describe('Pattern used to resolve end message ID'),
+      from_pattern: tool.schema.string().optional().describe('Pattern used to resolve the start of one contiguous block to archive'),
+      to_pattern: tool.schema.string().optional().describe('Pattern used to resolve the end of one contiguous block to archive'),
       reason: tool.schema.string().optional().describe('Reason for archiving this range'),
       summary: tool.schema.string().optional().describe('Concise summary (1-3 sentences) of the archived content'),
       index_terms: tool.schema.array(tool.schema.string()).optional().describe('Keywords for retrieval, 3-8 terms')

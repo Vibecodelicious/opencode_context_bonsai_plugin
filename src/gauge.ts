@@ -47,15 +47,17 @@ export function handleTokenEvent(event: V1Event): void {
 
 export function formatGaugeText(used: number, modelLimit: number, percent: number): string {
   const baseGauge = `[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%)]`
-  
+
+  const selectionContract = 'Protect operational-rule and overarching-goal anchors, protect unresolved task instructions, and prune oldest completed contiguous blocks first. In a single turn, rank safe blocks by completion certainty, dependency risk, age, then reclaim size, execute prune immediately, and do not output partitions or rankings.'
+
   if (percent < 30) {
-    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work.`
+    return `${baseGauge} ${selectionContract} Then continue your work.`
   } else if (percent <= 60) {
-    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive — a summary is left behind and the original content can be retrieved later.`
+    return `${baseGauge} ${selectionContract} Pruning is not destructive - a summary is left behind and the original content can be retrieved later.`
   } else if (percent <= 80) {
-    return `${baseGauge} Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive — a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune the messages from the previous debugging session, but I need to remember X"). This message persists separately from the pruning summary.`
+    return `${baseGauge} ${selectionContract} Newest content is default keep, with narrow exceptions for clearly completed or redundant recent blocks. significant drift requires 2 of 3 signals before pruning protected anchors; signal (c) is unmet reclaim below 60% usage or below 15% of usable budget while above 60%. Pruning is not destructive - a summary is left behind and the original content can be retrieved later.`
   } else {
-    return `[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%) — PRUNE NOW] Prune any completed, no-longer-useful context now and then continue your work. Pruning is not destructive — a summary is left behind and the original content can be retrieved later. Before pruning, you can preserve key details by stating what you need to remember in a new message (e.g., "I'm going to prune msg_abc through msg_def but I need to remember X"). This message persists separately from the pruning summary. Failure to prune immediately will lead to significantly degraded performance.`
+    return `[CONTEXT GAUGE: ${used} / ${modelLimit} tokens (${percent}%) - PRUNE NOW] ${selectionContract} Newest content is default keep, with narrow exceptions for clearly completed or redundant recent blocks. significant drift requires 2 of 3 signals before pruning protected anchors; signal (c) is unmet reclaim below 60% usage or below 15% of usable budget while above 60%. Pruning is not destructive - a summary is left behind and the original content can be retrieved later. Failure to prune immediately will lead to significantly degraded performance.`
   }
 }
 
