@@ -62,6 +62,5 @@ Before pruning, verify that key learnings, decisions, and context are preserved 
 If similar patterns repeat, summarize the iteration process and outcomes rather than keeping all steps.
 
 ## Range Partitioning
-- Single range: When content is cohesive and related
-- Multiple ranges: When distinct topics or phases can be separated
+- Single contiguous range per prune call: select one cohesive, adjacent block bounded by from_pattern and to_pattern.
 `
