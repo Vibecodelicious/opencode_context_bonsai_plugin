@@ -264,7 +264,10 @@ describe("gauge", () => {
     test("should return low severity message for <30%", () => {
       const result = formatGaugeText(1000, 10000, 10)
       expect(result).toContain('[CONTEXT GAUGE: 1000 / 10000 tokens (10%)]')
-      expect(result).toContain('Prune any completed')
+      expect(result).toContain('oldest completed contiguous blocks first')
+      expect(result).toContain('protect unresolved task instructions')
+      expect(result).toContain('single turn')
+      expect(result).toContain('do not output partitions or rankings')
       expect(result).toContain('continue your work')
       expect(result).not.toContain('not destructive')
     })
@@ -279,55 +282,62 @@ describe("gauge", () => {
     test("should return medium severity message for 30-59%", () => {
       const result = formatGaugeText(3000, 10000, 30)
       expect(result).toContain('[CONTEXT GAUGE: 3000 / 10000 tokens (30%)]')
-      expect(result).toContain('Prune any completed')
-      expect(result).toContain('continue your work')
+      expect(result).toContain('oldest completed contiguous blocks first')
+      expect(result).toContain('single turn')
       expect(result).toContain('not destructive')
-      expect(result).not.toContain('preserve key details')
+      expect(result).not.toContain('significant drift requires 2 of 3 signals')
     })
 
     test("should return medium severity message at 59%", () => {
       const result = formatGaugeText(5900, 10000, 59)
       expect(result).toContain('not destructive')
-      expect(result).not.toContain('preserve key details')
+      expect(result).not.toContain('significant drift requires 2 of 3 signals')
     })
 
     test("should return medium severity message at 60%", () => {
       const result = formatGaugeText(6000, 10000, 60)
       expect(result).toContain('[CONTEXT GAUGE: 6000 / 10000 tokens (60%)]')
       expect(result).toContain('not destructive')
-      expect(result).not.toContain('preserve key details')
+      expect(result).not.toContain('significant drift requires 2 of 3 signals')
     })
 
     test("should return high severity message for 61-80%", () => {
       const result = formatGaugeText(6100, 10000, 61)
       expect(result).toContain('[CONTEXT GAUGE: 6100 / 10000 tokens (61%)]')
-      expect(result).toContain('Prune any completed')
-      expect(result).toContain('continue your work')
+      expect(result).toContain('oldest completed contiguous blocks first')
       expect(result).toContain('not destructive')
-      expect(result).toContain('preserve key details')
-      expect(result).not.toContain('— PRUNE NOW')
+      expect(result).toContain('significant drift requires 2 of 3 signals')
+      expect(result).toContain('Newest content is default keep')
+      expect(result).not.toContain('PRUNE NOW')
     })
 
     test("should return high severity message at 80%", () => {
       const result = formatGaugeText(8000, 10000, 80)
-      expect(result).toContain('preserve key details')
-      expect(result).not.toContain('— PRUNE NOW')
+      expect(result).toContain('significant drift requires 2 of 3 signals')
+      expect(result).not.toContain('PRUNE NOW')
     })
 
     test("should return critical severity message for >=81%", () => {
       const result = formatGaugeText(8100, 10000, 81)
-      expect(result).toContain('[CONTEXT GAUGE: 8100 / 10000 tokens (81%) — PRUNE NOW]')
-      expect(result).toContain('Prune any completed')
-      expect(result).toContain('continue your work')
+      expect(result).toContain('[CONTEXT GAUGE: 8100 / 10000 tokens (81%) - PRUNE NOW]')
+      expect(result).toContain('oldest completed contiguous blocks first')
       expect(result).toContain('not destructive')
-      expect(result).toContain('preserve key details')
+      expect(result).toContain('significant drift requires 2 of 3 signals')
       expect(result).toContain('Failure to prune immediately')
+      expect(result).not.toContain('state what you need to remember in a new message before pruning')
     })
 
     test("should return critical severity message at 100%", () => {
       const result = formatGaugeText(10000, 10000, 100)
-      expect(result).toContain('— PRUNE NOW]')
+      expect(result).toContain('- PRUNE NOW]')
       expect(result).toContain('Failure to prune immediately')
+    })
+
+    test("does not imply a two-turn prune workflow", () => {
+      const result = formatGaugeText(8100, 10000, 81)
+      expect(result).not.toContain('first report candidates')
+      expect(result).not.toContain('then prune')
+      expect(result).not.toContain('state what you need to remember in a new message before pruning')
     })
   })
 })

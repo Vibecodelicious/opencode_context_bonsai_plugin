@@ -12,6 +12,17 @@ describe('prune tool', () => {
     clearSessionState(sessionID)
   })
 
+  test('tool metadata aligns with single-turn contiguous pruning contract', () => {
+    expect((pruneToolDefinition as any).description).toContain('single turn')
+    expect((pruneToolDefinition as any).description).toContain('do not output partitions or rankings')
+    expect((pruneToolDefinition as any).description).toContain('contiguous range')
+    expect((pruneToolDefinition as any).args.from_pattern.description).toContain('contiguous block')
+    expect((pruneToolDefinition as any).args.to_pattern.description).toContain('contiguous block')
+    expect((pruneToolDefinition as any).description).not.toContain('first report candidates')
+    expect((pruneToolDefinition as any).description).not.toContain('then prune')
+    expect((pruneToolDefinition as any).description).not.toContain('state what you need to remember in a new message before pruning')
+  })
+
   test('no-arg calls are rejected and do not mutate ID visibility', async () => {
     setIdVisibility(sessionID, true)
     const mockCtx = {
