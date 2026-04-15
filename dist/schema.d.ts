@@ -28,8 +28,7 @@ export declare const ArchiveSchema: z.ZodObject<{
     } | undefined;
 }>;
 export type ArchiveValue = NonNullable<z.infer<typeof ArchiveSchema>["archive"]>;
-export declare function getArchiveKeys(): string[];
-export declare function resolveArchiveFromMetadata(metadata: Record<string, unknown> | undefined, archiveKeys?: readonly string[]): {
+export declare function resolveArchiveFromMetadata(metadata: Record<string, unknown> | undefined): {
     archive: ArchiveValue;
     key: string;
 } | null;
@@ -41,4 +40,4 @@ export declare function setArchiveMetadata(draft: {
 }, archive: ArchiveValue): void;
 export declare function clearArchiveMetadata(draft: {
     metadata?: Record<string, unknown>;
-}, archiveKeys?: readonly string[]): void;
+}): void;

@@ -1,12 +1,16 @@
 // @bun
 var __defProp = Object.defineProperty;
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: (newValue) => all[name] = () => newValue
+      set: __exportSetter.bind(all, name)
     });
 };
 
@@ -55,7 +59,6 @@ If similar patterns repeat, summarize the iteration process and outcomes rather 
 // src/constants.ts
 var PLUGIN_ID = "opencode-context-bonsai";
 var ARCHIVE_KEY = "opencode-context-bonsai";
-var LEGACY_ARCHIVE_KEYS = [];
 
 // src/state.ts
 var tokenCache = new Map;
@@ -16452,18 +16455,13 @@ var ArchiveSchema = exports_external2.object({
     rangeEnd: exports_external2.string()
   }).optional()
 });
-function getArchiveKeys() {
-  return [ARCHIVE_KEY, ...LEGACY_ARCHIVE_KEYS];
-}
-function resolveArchiveFromMetadata(metadata, archiveKeys = getArchiveKeys()) {
-  for (const key of archiveKeys) {
-    try {
-      const parsed = ArchiveSchema.parse(metadata?.[key]);
-      if (parsed.archive) {
-        return { archive: parsed.archive, key };
-      }
-    } catch {}
-  }
+function resolveArchiveFromMetadata(metadata) {
+  try {
+    const parsed = ArchiveSchema.parse(metadata?.[ARCHIVE_KEY]);
+    if (parsed.archive) {
+      return { archive: parsed.archive, key: ARCHIVE_KEY };
+    }
+  } catch {}
   return null;
 }
 function getArchive(msg) {
@@ -16478,13 +16476,11 @@ function setArchiveMetadata(draft, archive) {
   }
   draft.metadata[ARCHIVE_KEY] = { archive };
 }
-function clearArchiveMetadata(draft, archiveKeys = getArchiveKeys()) {
+function clearArchiveMetadata(draft) {
   if (!draft.metadata) {
     return;
   }
-  for (const key of archiveKeys) {
-    delete draft.metadata[key];
-  }
+  delete draft.metadata[ARCHIVE_KEY];
 }
 
 // src/runtime-compat.ts
