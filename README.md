@@ -1,101 +1,50 @@
 # opencode-context-bonsai
 
-Surgical context compaction plugin for OpenCode that enables LLMs to selectively prune and retrieve conversation history, keeping sessions under context limits without triggering built-in overflow compaction.
+OpenCode Context Bonsai plugin. OpenCode is the reference implementation for Context Bonsai behavior.
 
-## Overview
-
-This plugin provides autonomous context management for long-running OpenCode sessions. Instead of losing context when the window fills up, the LLM can archive stale conversation segments with summaries and retrieve them later if needed.
-
-## Features
-
-- **Selective Pruning**: Archive message ranges with LLM-generated summaries and index terms
-- **Transparent Retrieval**: Restore previously pruned content when needed
-- **Context Gauges**: Real-time token utilization tracking to guide autonomous pruning decisions
-- **Zero Configuration**: Works out of the box with sensible defaults
-- **Provider Agnostic**: Compatible with all LLM providers (Claude, GPT-4, etc.)
-
-## How It Works
-
-The plugin provides two tools that the LLM can call autonomously:
-
-### `context-bonsai:prune`
-
-Pattern-based tool for archiving conversation history:
-
-- Call with `from_pattern`, `to_pattern`, `summary`, and `index_terms` (optional `reason`)
-- The tool resolves both patterns to unique message boundaries, then archives that range
-
-Archived messages are replaced with compact placeholders containing the summary and index terms.
-
-### `context-bonsai:retrieve`
-
-Restores previously pruned content by message ID, bringing the full conversation history back into context.
+For the shared explanation of Context Bonsai, see the main project README: https://github.com/Vibecodelicious/context-bonsai-agents
 
 ## Installation
 
-```bash
+Install the package where OpenCode can load plugins:
+
+```sh
 npm install opencode-context-bonsai
 ```
 
-Add to your OpenCode configuration:
+Then configure OpenCode to load the `opencode-context-bonsai` plugin package according to your OpenCode plugin configuration.
 
-```json
-{
-  "plugins": ["opencode-context-bonsai"]
-}
-```
+The package exports an OpenCode plugin factory as its default export and as `contextBonsai`.
 
-Or place in `.opencode/plugin/` directory.
+## Usage
+
+Once loaded, the plugin registers two model-facing tools:
+
+- `context-bonsai-prune`
+- `context-bonsai-retrieve`
+
+The model decides when to use those tools based on the injected guidance and context-pressure reminders. Pruned ranges are hidden from active model context and replaced with placeholders. Retrieval restores archived ranges by clearing the archive metadata on the anchor message.
+
+## How This Is Implemented For OpenCode
+
+The plugin uses OpenCode hooks to register tools, append model guidance, observe token usage, inject gauge reminders, and transform messages before they are sent to the model.
+
+Archive state is stored in OpenCode message metadata under the canonical key `opencode-context-bonsai`. The original message content remains in OpenCode storage.
+
+Runtime compatibility is checked before reading or updating messages. Unsupported runtimes return explicit compatibility errors rather than silently doing nothing.
 
 ## Requirements
 
-- OpenCode with Phase 1 upstream changes (message metadata support)
-- `@opencode-ai/plugin` package
-- `ai` SDK v5+
-
-## Runtime Compatibility
-
-`opencode-context-bonsai` supports multiple OpenCode runtime capability tiers:
-
-- **Message reads**: uses `ctx.messages` when available; otherwise falls back to `ctx.client.session.messages({ path: { id: ctx.sessionID } })`.
-- **Message writes**: uses `ctx.updateMessage` when available; otherwise uses an internal updater injected at plugin initialization when the runtime exposes an atomic updater capability.
-- **Unsupported runtime behavior**: tools return explicit compatibility errors instead of silently no-oping when required read/write capabilities are unavailable.
-
-Compatibility errors are returned as exact tool output strings:
-
-- `Compatibility error: unable to load session messages in this runtime.`
-- `Compatibility error: message updates are unsupported in this runtime.`
-
-## Use Cases
-
-- Multi-hour debugging sessions that approach context limits
-- Complex refactoring work where earlier context becomes stale
-- Project switching mid-session without losing conversation history
-- Efficient context usage on slow or expensive models
-
-## Architecture
-
-The plugin uses OpenCode's hook system:
-
-- **`tool`**: Registers prune and retrieve tools
-- **`event`**: Tracks token usage for context gauges
-- **`chat.params`**: Monitors model configuration
-- **`messages.transform`**: Renders placeholders and removes archived messages
-- **`system.transform`**: Injects behavioral guidance into system prompt
+- OpenCode with plugin support
+- Bun for local development and builds
+- `@opencode-ai/plugin`
 
 ## Development
 
-```bash
-# Install dependencies
+See [DEVELOPMENT.md](DEVELOPMENT.md).
+
+```sh
 bun install
-
-# Build
-bun run build
-
-# Test
 bun test
+bun run build
 ```
-
-## License
-
-MIT
