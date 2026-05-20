@@ -25,6 +25,8 @@ bun test
 bun run build
 ```
 
+Run commands from this side repo. Live harness validation requires the parent repo layout because the OpenCode fork and this plugin are matched submodules there.
+
 ## References
 
 - Main project README: https://github.com/Vibecodelicious/context-bonsai-agents

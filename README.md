@@ -114,6 +114,19 @@ Archive state is stored in OpenCode message metadata under the canonical key `op
 
 Runtime compatibility is checked before reading or updating messages. Unsupported runtimes return explicit compatibility errors rather than silently doing nothing.
 
+## Security Disclosure
+
+- **What the plugin reads.** OpenCode session messages and message metadata for the active conversation, to resolve prune patterns, validate ranges, render placeholders, and clear archive state on retrieval.
+- **Where archive state persists on disk.** In OpenCode's stored message metadata under the key `opencode-context-bonsai`. The plugin does not create a separate archive database.
+- **What is transmitted to the LLM provider.** Placeholder summaries and index terms remain in active context and can be sent to the model. Archived original messages are removed from provider-bound context until retrieval clears their archive metadata.
+- **Network egress.** The plugin does not initiate network calls separately from OpenCode. Model traffic uses OpenCode's provider configuration.
+
+## Uninstall
+
+1. Remove the Context Bonsai plugin entry from `~/.config/opencode/opencode.json`.
+2. Stop using the `opencode_bonsai` shell function, or remove it from your shell rc file.
+3. Existing OpenCode sessions may still contain `opencode-context-bonsai` metadata. Without the plugin, that metadata is inert.
+
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md).
