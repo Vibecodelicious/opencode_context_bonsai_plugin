@@ -39,6 +39,12 @@ The build produces a per-platform binary at `opencode/packages/opencode/dist/ope
 
 If `bun install` fails on first run with a `node-gyp ENOENT` error from a native-build postinstall, simply re-run it — the second attempt typically completes.
 
+If a later `bun run build` or `bun typecheck` fails with `Failed to resolve entry for package "..."` or `Cannot find module ...` errors for dependencies that should be present, `bun install` produced an incomplete dependency tree. Re-running `bun install` alone may not repair it — remove `node_modules` and reinstall, then rebuild:
+
+```sh
+rm -rf node_modules && bun install
+```
+
 ### Wire the plugin into your OpenCode global config
 
 Add the plugin to your OpenCode global config so it loads regardless of which workspace you start OpenCode in. Edit `~/.config/opencode/opencode.json` (create the file if it doesn't exist) and add a `plugin` entry pointing at the plugin's TypeScript entry:
